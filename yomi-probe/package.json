@@ -1,0 +1,7 @@
+{
+  "name": "linecall-yomi-probe",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node server.mjs", "relay": "node relay.mjs", "test": "node --test relay-rules.test.mjs" },
+  "dependencies": { "@rikaidev/yomi": "0.5.0" }
+}

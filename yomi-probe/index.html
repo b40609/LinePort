@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LINE 一般群組收訊驗證</title>
+<style nonce="__NONCE__">
+body{font-family:system-ui,"Microsoft JhengHei",sans-serif;max-width:950px;margin:36px auto;padding:0 20px;background:#f5f7fa;color:#172333}h1{font-size:25px}section{background:white;border:1px solid #dbe1e8;border-radius:12px;padding:20px;margin:16px 0}button,input,select{font:inherit;padding:10px;border-radius:7px;border:1px solid #bdc8d5;margin:5px 5px 5px 0}button{cursor:pointer;background:#eaf2ff}select{max-width:100%;min-width:300px}button:disabled{opacity:.5;cursor:wait}#pin{font-size:32px;font-weight:bold;letter-spacing:8px;color:#126147}#notice{white-space:pre-wrap;color:#a23521}.hint{color:#58667a;font-size:14px}article{border-bottom:1px solid #dbe1e8;padding:12px 0}article pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}#status{white-space:pre-wrap}small{color:#65738a}
+</style>
+<h1>LINE 一般群組收訊驗證</h1>
+<p>使用你的帳號讀取一般群組。群組名稱直接選取，支援表情符號。</p>
+<section><b>1. 登入 LINE</b><p class="hint">請使用登入此帳號的那台 iPhone。LINE → 主頁 → 設定 → 我的帳號：開啟「允許自其他裝置登入」，並完成 Face ID／Touch ID 連結。這次登入可能使原本的電腦版 LINE 登出。</p>
+<input id="phone" type="tel" autocomplete="off" placeholder="09xxxxxxxx（僅送至本機）" aria-label="手機號碼"><button id="login">登入／手機授權</button><button id="resume">使用本機已保存登入</button>
+<div id="status">尚未登入</div><div id="pin"></div>
+<p class="hint">PIN 出現後，請在 iPhone LINE → 主頁 → 設定 → 我的帳號 →「連動其他裝置」輸入，再完成 Face ID／Touch ID 認證。請於 3 分鐘內完成，不需等待簡訊或聊天訊息。若未顯示輸入畫面，重新啟動手機 LINE 後再試。登入資料保存於 %LOCALAPPDATA%\LineCallYomiProbe；請勿分享此資料夾。</p></section>
+<section><b>2. 選擇一般群組</b><p><button id="groups">讀取群組列表</button><select id="group" aria-label="一般群組"><option value="">先登入並讀取列表</option></select></p><div id="groupCount" class="hint"></div></section>
+<section><b>3. 驗證文字收訊</b><p><button id="read">讀取最近 50 則</button><button id="poll">開始每 10 秒讀取</button><button id="export">匯出本次文字 JSON</button></p>
+<p class="hint">可用另一個帳號在所選群組發一則測試文字，再確認這裡是否出現。頁面保留本次讀到的訊息，按匯出可保存。最近 50 則輪詢可能漏掉大量訊息，尚非正式轉送服務。LINE 社群（OpenChat）不在本次支援範圍。</p><div id="stats"></div><div id="messages"></div></section>
+<p id="notice" role="alert"></p>
+<script nonce="__NONCE__">
+const token='__TOKEN__';
+const $=id=>document.getElementById(id);
+let polling=false,reading=false,pollTimer=null,lastState=null;
+const collected=new Map();
+async function api(route,data){const res=await fetch('/api/'+route,{method:data===undefined?'GET':'POST',headers:{'X-Probe-Token':token,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data)});const result=await res.json();if(!res.ok)throw new Error(result.error);return result;}
+async function act(fn){$('notice').textContent='';try{await fn();}catch(e){$('notice').textContent=e.message;}}
+function stop(){polling=false;clearTimeout(pollTimer);$('poll').textContent='開始每 10 秒讀取';}
+function render(){const id=$('group').value;const rows=[...collected.values()].filter(m=>m.groupId===id).sort((a,b)=>a.time-b.time);$('messages').replaceChildren();for(const m of rows){const article=document.createElement('article');const stamp=document.createElement('small');stamp.textContent=(m.time?new Date(m.time).toLocaleString():'時間未知')+' · '+m.sender;const text=document.createElement('pre');text.textContent=m.text||(m.decryptFailed?'[文字解密失敗]':'[非文字或無法讀取內容]');article.append(stamp,text);$('messages').append(article);}}
+async function read(){if(reading)return;const id=$('group').value;if(!id)throw new Error('請先選擇群組');reading=true;try{const result=await api('messages',{id});for(const m of result.messages){const key=id+'|'+(m.id||JSON.stringify([m.time,m.sender,m.text,m.type]));collected.set(key,{...m,groupId:id,groupName:result.group});}render();$('stats').textContent='上次讀取：'+new Date(result.checkedAt).toLocaleTimeString()+'；這次 '+result.messages.length+' 則，文字 '+result.messages.filter(m=>m.text).length+' 則，解密失敗 '+result.messages.filter(m=>m.decryptFailed).length+' 則。';}finally{reading=false;}}
+async function loop(){try{await read();}catch(e){$('notice').textContent=e.message;stop();}if(polling)pollTimer=setTimeout(loop,10000);}
+$('login').onclick=()=>act(async()=>{stop();await api('login',{phone:$('phone').value});$('phone').value='';await status();});
+$('resume').onclick=()=>act(async()=>{const result=await api('resume',{});if(!result.connected)throw new Error('沒有可使用的登入，請用手機授權。');await status();});
+$('groups').onclick=()=>act(async()=>{stop();const result=await api('groups',{});$('group').replaceChildren();for(const group of result.groups){const option=document.createElement('option');option.value=group.id;option.textContent=group.name;$('group').append(option);}$('groupCount').textContent='取得 '+result.groups.length+' 個群組名稱；帳號回報 '+result.joinedCount+' 個已加入群組。';render();});
+$('group').onchange=()=>{stop();render();};
+$('read').onclick=()=>act(read);
+$('poll').onclick=()=>act(async()=>{if(polling){stop();return;}if(!$('group').value)throw new Error('請先選擇群組');polling=true;$('poll').textContent='停止自動讀取';await loop();});
+$('export').onclick=()=>act(async()=>{if(!collected.size)throw new Error('尚未讀到訊息');const blob=new Blob([JSON.stringify({exportedAt:new Date().toISOString(),messages:[...collected.values()]},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='line-group-probe-'+Date.now()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+async function status(){const state=await api('status');lastState=state;const labels={idle:'尚未登入',logging_in:'正在向 LINE 申請登入…',waiting_pin:'請在手機 LINE → 我的帳號 → 連動其他裝置，輸入下方 PIN',waiting_approval:'請在手機完成 Face ID／Touch ID 登入認證',connected:'已登入，可讀取群組列表',failed:'登入失敗，請確認手機設定後重新取得 PIN'};$('status').textContent=labels[state.phase]||state.phase;$('pin').textContent=state.pin;$('login').disabled=state.busy||state.connected;$('resume').disabled=state.busy||state.connected;$('groups').disabled=state.busy||!state.connected;$('read').disabled=state.busy||!state.connected;if(state.error)$('notice').textContent=state.error;}
+async function heartbeat(){try{await status();}catch(e){stop();$('notice').textContent='本機服務無法連線，請重新啟動。';}setTimeout(heartbeat,1500);}heartbeat();
+</script></html>
