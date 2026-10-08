@@ -1,13 +1,11 @@
-# LINE Relay Bridge｜登入與轉送
+# LINE Relay Bridge：登入、一般群組收訊與轉送
 
-本目錄包含 Yomi 0.5.0 登入頁、訊息讀取及「來源1 → 目的2」背景文字轉送。安裝、操作、資料保存及限制請看根目錄 [README](../README.md)，第三方來源請看 [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md)。
+從 [專案 README](../README.md) 開始。第一次安裝請看 [安裝教學](../docs/INSTALL.md)，日常操作見 [使用教學](../docs/USAGE.md)，故障見 [疑難排解](../docs/TROUBLESHOOTING.md)。
 
-```powershell
-npm ci --ignore-scripts
-npm test
-npm start
-# 手機授權完成後，在另一個終端啟動背景服務：
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start-relay.ps1
-```
+- `npm ci --ignore-scripts`：安裝固定依賴。
+- `npm test`：執行模擬測試，不發真實訊息。
+- `npm start`：啟動本機登入頁。
+- `start-relay.ps1 -Interactive`：貼上完整來源／目的名稱後啟動背景轉送。
+- `stop-relay.ps1`：停止由此專案啟動器啟動的背景轉送。
 
-登入資料存放於 `%LOCALAPPDATA%\LineCallYomiProbe`；請勿提交或分享。即時狀態為 http://127.0.0.1:18766/status。LINE 社群及 Telegram 尚未支援。
+本工具使用非官方個人 LINE 協定，有帳號限制風險。登入與 E2EE 資料不得分享；[安全說明](../SECURITY.md) 有完整限制與修正紀錄。

@@ -1,22 +1,14 @@
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFile, mkdir } from 'node:fs/promises';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { authorized, readJson, localRequest, hardenServer, HttpError } from './local-http.mjs';
+import { prepareDataDirectory } from './runtime.mjs';
+import { guardProtocol } from './protocol-guard.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const port = 18765;
-const origin = `http://127.0.0.1:${port}`;
-const token = randomBytes(32).toString('hex');
-process.env.YOMI_DATA_DIR = path.join(process.env.LOCALAPPDATA || root, 'LineCallYomiProbe');
-process.env.YOMI_NO_KEYCHAIN = '1';
-await mkdir(process.env.YOMI_DATA_DIR, { recursive: true });
-// Upstream log contexts can contain credentials. Only our static diagnostics reach stdout.
-const print = console.log.bind(console);
-for (const method of ['log', 'warn', 'error', 'debug', 'info', 'trace']) console[method] = () => {};
-const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
-const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
-const service = new LineProtocolService();
+export function createProbeServer({ service, runPwlessLogin, port = 18765, token = randomBytes(32).toString('hex') }) {
 service.on('error', () => {});
 const state = { phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
 let groups = new Map();
@@ -30,20 +22,8 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
   res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' });
   res.end(type.startsWith('application/json') ? JSON.stringify(body) : body);
 }
-function authorized(req) {
-  const supplied = Buffer.from(String(req.headers['x-probe-token'] || ''));
-  const expected = Buffer.from(token);
-  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
-}
-async function body(req) {
-  let text = '';
-  for await (const part of req) {
-    text += part;
-    if (text.length > 4096) throw new Error('Body too large');
-  }
-  return JSON.parse(text || '{}');
-}
 async function operation(fn) {
+  if (state.busy) throw new HttpError(409, '前一個操作尚未完成');
   state.busy = true;
   state.error = '';
   try { return await fn(); }
@@ -52,7 +32,7 @@ async function operation(fn) {
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.headers.host !== `127.0.0.1:${port}` || (req.headers.origin && req.headers.origin !== origin)) return send(res, 403, { error: '拒絕非本機來源' });
+  if (!localRequest(req, port)) return send(res, 403, { error: '拒絕非本機來源' });
   try {
     if (req.method === 'GET' && req.url === '/') {
       const nonce = randomBytes(16).toString('base64');
@@ -60,11 +40,13 @@ const server = http.createServer(async (req, res) => {
       res.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
       return send(res, 200, html, 'text/html; charset=utf-8');
     }
-    if (!authorized(req)) return send(res, 403, { error: '請從本機首頁開啟' });
+    if (!authorized(req, token)) return send(res, 403, { error: '請從本機首頁開啟' });
     if (req.method === 'GET' && req.url === '/api/status') return send(res, 200, state);
     if (req.method !== 'POST') return send(res, 404, { error: '找不到操作' });
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
-    const input = await body(req);
+    const input = await readJson(req);
+    // Body streams can overlap. Recheck after awaiting the body, before starting work.
+    if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
     if (req.url === '/api/login') {
       if (state.connected) return send(res, 409, { error: '已登入，請直接讀取群組' });
       let phone = String(input.phone || '').replace(/[\s-]/g, '');
@@ -121,7 +103,23 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, result);
     }
     return send(res, 404, { error: '找不到操作' });
-  } catch (error) { send(res, 500, { error: failure(error) }); }
+  } catch (error) { send(res, error instanceof HttpError ? error.status : 500, { error: error instanceof HttpError ? error.message : failure(error) }); }
 });
+return hardenServer(server);
+}
+
+async function main() {
+const print = console.log.bind(console);
+for (const method of ['log', 'warn', 'error', 'debug', 'info', 'trace']) console[method] = () => {};
+await prepareDataDirectory();
+const { LineClient } = await import('./node_modules/@rikaidev/yomi/dist/line/client/index.js');
+guardProtocol(LineClient);
+const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
+const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
+const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
-server.listen(port, '127.0.0.1', () => print(`LINE Relay Bridge: ${origin}`));
+server.listen(18765, '127.0.0.1', () => print('LINE Relay Bridge: http://127.0.0.1:18765/'));
+}
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(() => { process.stderr.write('Startup failed; check data permissions and dependencies.\n'); process.exitCode = 1; });
+}

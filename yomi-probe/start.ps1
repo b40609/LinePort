@@ -7,6 +7,7 @@ try {
 } catch { }
 if (-not $probeReady) {
     $probeNode = (Get-Command node.exe -ErrorAction Stop).Source
+    if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'node_modules/@rikaidev/yomi/dist/line/core/service.js'))) { throw 'Dependencies missing. Run npm ci --ignore-scripts in yomi-probe first.' }
     $probeScript = Join-Path $PSScriptRoot 'server.mjs'
     Start-Process -FilePath $probeNode -ArgumentList ('"' + $probeScript + '"') -WorkingDirectory $PSScriptRoot -WindowStyle Hidden
     for ($probeAttempt = 0; $probeAttempt -lt 20; $probeAttempt++) {

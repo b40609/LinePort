@@ -17,3 +17,5 @@ yomi-probe/node_modules/
 LineCallYomiProbe/
 *credentials*
 *session-state*
+*e2ee-cache*
+relay-config*.json

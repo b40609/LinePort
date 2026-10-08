@@ -1,6 +1,12 @@
-import path from 'node:path';
-process.env.YOMI_DATA_DIR = path.join(process.env.LOCALAPPDATA, 'LineCallYomiProbe');
-process.env.YOMI_NO_KEYCHAIN = '1';
+import { prepareDataDirectory } from './runtime.mjs';
+import { guardProtocol } from './protocol-guard.mjs';
+if (!process.argv.includes('--send-latest')) {
+  process.stderr.write('This sends a real historical message. Use --send-latest only when intentional.\n');
+  process.exit(2);
+}
+await prepareDataDirectory();
+const { LineClient } = await import('./node_modules/@rikaidev/yomi/dist/line/client/index.js');
+guardProtocol(LineClient);
 const print = console.log.bind(console);
 for (const key of ['log', 'warn', 'error', 'debug', 'info', 'trace']) console[key] = () => {};
 const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');

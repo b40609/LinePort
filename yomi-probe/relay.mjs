@@ -1,36 +1,33 @@
 import http from 'node:http';
 import path from 'node:path';
-import { mkdir, readFile, appendFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { unseenText } from './relay-rules.mjs';
-const dataDir = path.join(process.env.LOCALAPPDATA, 'LineCallYomiProbe');
-process.env.YOMI_DATA_DIR = dataDir;
-process.env.YOMI_NO_KEYCHAIN = '1';
+import { appendRecord, loadJournal, establishBaseline, forwardBatch } from './relay-core.mjs';
+import { localRequest, hardenServer } from './local-http.mjs';
+import { prepareDataDirectory } from './runtime.mjs';
+import { guardProtocol } from './protocol-guard.mjs';
 for (const key of ['log', 'warn', 'error', 'debug', 'info', 'trace']) console[key] = () => {};
-const state = { phase: 'starting', source: process.env.LINECALL_SOURCE || '來源1', destination: process.env.LINECALL_DESTINATION || '目的2', intervalSeconds: 3, startedAt: null, polls: 0, forwarded: 0, uncertain: 0, errors: 0, lastPoll: null, stage: 'start' };
+const state = { app: 'line-relay-bridge', version: 2, pid: process.pid, phase: 'starting', source: process.env.LINECALL_SOURCE || '來源1', destination: process.env.LINECALL_DESTINATION || '目的2', intervalSeconds: 3, retrySeconds: 0, consecutiveErrors: 0, startedAt: null, polls: 0, forwarded: 0, uncertain: 0, errors: 0, lastPoll: null, stage: 'start' };
 const server = http.createServer((req, res) => {
-  if (req.headers.host !== '127.0.0.1:18766' || req.url !== '/status' || req.method !== 'GET') { res.writeHead(403); res.end(); return; }
-  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  if (!localRequest(req, 18766) || req.url !== '/status' || req.method !== 'GET') { res.writeHead(403); res.end(); return; }
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'", 'Referrer-Policy': 'no-referrer' });
   res.end(JSON.stringify(state));
 });
 server.on('error', () => process.exit(1));
+hardenServer(server);
 await new Promise(resolve => server.listen(18766, '127.0.0.1', resolve));
+try {
+state.stage = 'data_permissions';
+const dataDir = await prepareDataDirectory();
+const { LineClient } = await import('./node_modules/@rikaidev/yomi/dist/line/client/index.js');
+guardProtocol(LineClient);
 const routeKey = createHash('sha256').update(JSON.stringify([state.source, state.destination])).digest('hex').slice(0, 24);
 const journal = path.join(dataDir, state.source === '來源1' && state.destination === '目的2'
   ? 'relay-source1-destination2.jsonl' : `relay-${routeKey}.jsonl`);
-const seen = new Set();
-let startedAt;
-async function record(row) { await appendFile(journal, JSON.stringify(row) + '\n', 'utf8'); }
-try {
-  await mkdir(dataDir, { recursive: true });
-  try {
-    const lines = (await readFile(journal, 'utf8')).trim().split('\n').filter(Boolean);
-    for (const line of lines) {
-      const row = JSON.parse(line);
-      if (row.startedAt) startedAt = row.startedAt;
-      if (row.id) seen.add(row.id);
-    }
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+const record = row => appendRecord(journal, row);
+state.stage = 'journal';
+const saved = await loadJournal(journal);
+const seen = saved.seen;
+let startedAt = saved.startedAt;
   const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
   const service = new LineProtocolService();
   service.on('error', () => {});
@@ -46,17 +43,16 @@ try {
   };
   const source = find(state.source), destination = find(state.destination);
   if (source === destination) throw new Error('Same group');
+  state.stage = 'route_identity';
+  if (!service.profile?.mid) throw new Error('Missing account identity');
+  const routeIdentity = createHash('sha256').update(JSON.stringify([service.profile.mid, source, destination])).digest('hex');
+  if (saved.routeIdentity && saved.routeIdentity !== routeIdentity) throw new Error('Route identity changed');
+  if (!saved.routeIdentity) await record({ routeIdentity });
   state.stage = 'baseline';
   if (!startedAt) {
     startedAt = Date.now();
     const baseline = await service.getRecentMessages(source, 50);
-    await record({ startedAt });
-    for (const message of baseline) {
-      if (!message.id) continue;
-      const id = String(message.id);
-      await record({ id, outcome: 'baseline' });
-      seen.add(id);
-    }
+    await establishBaseline({ messages: baseline, startedAt, record, seen });
   }
   state.startedAt = new Date(startedAt).toISOString();
   state.phase = 'running';
@@ -64,31 +60,18 @@ try {
     try {
       state.stage = 'read';
       const messages = await service.getRecentMessages(source, 50);
+      if (service.loginRequired) { state.stage = 'login_required'; throw new Error('Login required'); }
       state.polls++; state.lastPoll = new Date().toISOString();
-      for (const message of unseenText(messages, seen, startedAt)) {
-        const id = String(message.id);
-        // Persist before sending: ambiguous network failures must not cause duplicates.
-        state.stage = 'journal';
-        await record({ id, outcome: 'sending' });
-        seen.add(id);
-        state.stage = 'send';
-        try {
-          await service.sendMessage(destination, message.text);
-        } catch {
-          state.uncertain++;
-          await record({ id, outcome: 'uncertain' });
-          continue;
-        }
-        state.forwarded++;
-        state.stage = 'journal';
-        await record({ id, outcome: 'sent' });
-      }
+      await forwardBatch({ messages, seen, startedAt, record, send: text => service.sendMessage(destination, text), state });
+      state.consecutiveErrors = 0; state.retrySeconds = 0;
       state.stage = 'waiting';
     } catch {
       state.errors++;
-      if (state.stage === 'journal') { state.phase = 'failed'; return; }
+      state.consecutiveErrors++;
+      if (state.stage !== 'read' || service.loginRequired || state.consecutiveErrors >= 5) { state.phase = 'failed'; return; }
+      state.retrySeconds = Math.min(60, 3 * 2 ** (state.consecutiveErrors - 1));
     }
-    setTimeout(poll, 3000);
+    setTimeout(poll, (state.retrySeconds || 3) * 1000);
   }
   await poll();
 } catch { state.phase = 'failed'; state.errors++; }
