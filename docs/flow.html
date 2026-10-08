@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-Hant">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LINE 訊息橋｜互動流程</title>
+<style>
+body{font-family:system-ui,"Microsoft JhengHei",sans-serif;background:#101827;color:#edf3ff;max-width:1000px;margin:32px auto;padding:0 20px}h1{font-size:26px}p{line-height:1.7;color:#c5d1e7}button{padding:10px 18px;margin:5px;border:0;border-radius:8px;font:inherit;cursor:pointer;background:#d8e8ff;color:#14213b}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:24px 0}.box{border:2px solid #40516d;border-radius:12px;padding:22px 12px;text-align:center;transition:background .3s,border-color .3s,transform .3s}.active{background:#155044;border-color:#55e6bb;transform:translateY(-5px)}#detail{background:#1b2941;border-radius:12px;padding:24px;min-height:100px;line-height:1.7}#counter{display:block;margin-top:16px;color:#85e8cf}@media(max-width:650px){.grid{grid-template-columns:repeat(2,1fr)}}@media(prefers-reduced-motion:reduce){.box{transition:none}.active{transform:none}}
+</style>
+<h1>LINE Relay Bridge｜新訊息如何到達目的群組</h1>
+<p>這是可播放的流程示範，使用模擬訊息。沒有網路請求、不讀取登入資料，也不會傳送真實 LINE 訊息。實際程式每輪完成後等待 3 秒，以下動畫僅為解說。</p>
+<button id="play">播放</button><button id="next">下一步</button><button id="reset">重設</button>
+<div class="grid"><div class="box" id="source">① 來源群組</div><div class="box" id="relay">② 背景程式＋Yomi</div><div class="box" id="journal">③ 本機 ID 紀錄</div><div class="box" id="destination">④ 目的群組</div></div>
+<div id="detail" aria-live="polite"></div><span id="counter"></span>
+<p>Yomi 使用手機授權的個人帳號協定工作階段，負責讀取、解密、加密及發送。這裡沒有 AI 或來源 Bot；但 LINE 伺服器仍可看到請求，非官方自動化有帳號限制風險。</p>
+<script>
+const steps=[
+  ['relay','恢復登入','背景程式由 Yomi 恢復本機登入，確認來源與目的都是已加入且名稱唯一的群組。'],
+  ['source','首次基準','首次啟動讀取舊訊息 A、B；此時不轉送。'],
+  ['journal','記住歷史 ID','將 A、B 的 ID 記為 baseline，並保存啟動時間。'],
+  ['source','來源出現新文字 C','示範群組新增 C。它具有新的訊息 ID。'],
+  ['relay','讀取近期快照','查詢最近 50 則，Yomi 在本機解密；不是 LINE 主動推送給程式。'],
+  ['journal','篩選未處理訊息','A、B 已在紀錄內，跳過；C 未出現且時間不早於基準，有可讀文字，保留。'],
+  ['journal','先寫 sending','發送前先保存 C 的 ID，避免中斷或結果不明造成重複轉送。'],
+  ['destination','加密並重新發送 C','Yomi 以你的個人帳號發送文字。目的群組看見的發訊者是你。'],
+  ['journal','保存結果','成功返回則記 sent；錯誤記 uncertain，不自動重試。程式中斷也可能漏送。'],
+  ['relay','等待 3 秒後再讀','下一輪仍可能讀到 A、B、C，但 ID 全部已存在，不會再次傳送。'],
+];
+let current=0,timer=null;
+function render(){document.querySelectorAll('.box').forEach(e=>e.classList.remove('active'));const [id,title,description]=steps[current];document.getElementById(id).classList.add('active');document.getElementById('detail').textContent=title+'：'+description;document.getElementById('counter').textContent='步驟 '+(current+1)+' / '+steps.length;}
+function stop(){clearInterval(timer);timer=null;document.getElementById('play').textContent='播放';}
+function advance(){if(current===steps.length-1){stop();return;}current++;render();}
+document.getElementById('play').onclick=()=>{if(timer){stop();return;}if(current===steps.length-1){current=0;render();}document.getElementById('play').textContent='暫停';timer=setInterval(advance,2300);};
+document.getElementById('next').onclick=()=>{stop();advance();};
+document.getElementById('reset').onclick=()=>{stop();current=0;render();};
+render();
+</script>
+</html>
