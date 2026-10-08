@@ -8,13 +8,20 @@ import { prepareDataDirectory } from './runtime.mjs';
 import { guardProtocol } from './protocol-guard.mjs';
 import { createRelayController } from './relay-controller.mjs';
 import { RelayError } from './relay-health.mjs';
+import { normalizeConfig, configRevision, createSettingsStore } from './route-config.mjs';
+import { lineDirectory } from './line-directory.mjs';
+import { createTelegramClient } from './telegram.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-export function createProbeServer({ service, runPwlessLogin, relayController, port = 18765, token = randomBytes(32).toString('hex') }) {
+export function createProbeServer({ service, runPwlessLogin, relayController, settingsStore, telegramFactory = createTelegramClient, port = 18765, token = randomBytes(32).toString('hex') }) {
 service.on('error', () => {});
 const state = { phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
 let groups = new Map();
 let relayAction = '';
+async function requireStopped() {
+  if (!relayController || (await relayController.status()).phase !== 'stopped') throw new HttpError(409, '請先停止轉送，再修改規則或平台連結');
+  if (state.busy) throw new HttpError(409, '前一個操作尚未完成');
+}
 
 function failure(error) {
   if (error instanceof RelayError) return error.message;
@@ -47,14 +54,67 @@ const server = http.createServer(async (req, res) => {
     if (!authorized(req, token)) return send(res, 403, { error: '請從本機首頁開啟' });
     if (req.method === 'GET' && req.url === '/api/status') return send(res, 200, state);
     if (req.method === 'GET' && req.url === '/api/relay/status') return send(res, 200, { ...(relayController ? await relayController.status() : { phase: 'unavailable' }), action: relayAction });
+    if (req.method === 'GET' && req.url === '/api/rules' && settingsStore) return send(res, 200, { config: await settingsStore.load(), telegramConfigured: Boolean(await settingsStore.telegramToken()) });
     if (req.method !== 'POST') return send(res, 404, { error: '找不到操作' });
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
-    const input = await readJson(req);
+    const input = await readJson(req, req.url === '/api/rules' ? 65536 : 4096);
     // Body streams can overlap. Recheck after awaiting the body, before starting work.
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
     if (req.url === '/api/relay/stop' && relayController) {
       relayAction = 'stopping';
       void operation(() => relayController.stop()).catch(() => {}).finally(() => { relayAction = ''; });
+      return send(res, 202, { accepted: true });
+    }
+    if (req.url === '/api/rules' && settingsStore) {
+      await requireStopped();
+      const config = normalizeConfig(input);
+      await operation(() => settingsStore.save(config));
+      return send(res, 200, { config });
+    }
+    if (req.url === '/api/telegram/connect' && settingsStore) {
+      await requireStopped();
+      const result = await operation(async () => {
+        const client = telegramFactory(input.token), me = await client.getMe();
+        await settingsStore.saveTelegram(input.token);
+        return { configured: true, name: String(me.username || me.first_name || 'Bot').slice(0, 100) };
+      });
+      return send(res, 200, result);
+    }
+    if (req.url === '/api/telegram/chat' && settingsStore) {
+      await requireStopped();
+      if (typeof input.id !== 'string' || !/^-?[1-9]\d{0,15}$/.test(input.id) || !Number.isSafeInteger(Number(input.id))) throw new HttpError(400, '請輸入數字聊天室 ID');
+      const result = await operation(async () => {
+        const chat = await telegramFactory(await settingsStore.telegramToken()).getChat(input.id);
+        if (chat.has_protected_content) throw new HttpError(400, '此 Telegram 聊天室禁止轉送');
+        return { platform: 'telegram', id: String(chat.id), name: String(chat.title || chat.first_name || chat.username || input.id).slice(0, 100), kind: chat.type === 'private' ? 'person' : 'group' };
+      });
+      return send(res, 200, result);
+    }
+    if (req.url === '/api/telegram/chats' && settingsStore) {
+      await requireStopped();
+      const result = await operation(async () => {
+        const updates = await telegramFactory(await settingsStore.telegramToken()).getUpdates(undefined, 0);
+        const rows = new Map();
+        for (const update of updates) {
+          const chat = (update.message || update.channel_post)?.chat;
+          if (chat && Number.isSafeInteger(chat.id) && !chat.has_protected_content) rows.set(String(chat.id), { platform: 'telegram', id: String(chat.id), name: String(chat.title || chat.first_name || chat.username || chat.id).slice(0, 100), kind: chat.type === 'private' ? 'person' : 'group' });
+        }
+        return { endpoints: [...rows.values()] };
+      });
+      return send(res, 200, result);
+    }
+    if (req.url === '/api/relay/start' && input.useRules && settingsStore && relayController) {
+      await requireStopped();
+      const config = await settingsStore.load();
+      const rules = config.rules.filter(rule => rule.enabled);
+      if (!rules.length) throw new HttpError(400, '請新增並啟用至少一條規則');
+      const endpoints = rules.flatMap(rule => [...rule.sources, ...rule.destinations]);
+      if (endpoints.some(endpoint => endpoint.platform === 'line') && !state.connected) throw new HttpError(401, '請先登入 LINE');
+      if (endpoints.some(endpoint => endpoint.platform === 'telegram') && !await settingsStore.telegramToken()) throw new HttpError(400, '請先連結 Telegram Bot');
+      // Recheck after asynchronous configuration reads before acquiring the lock.
+      if (state.busy) throw new HttpError(409, '前一個操作尚未完成');
+      relayAction = 'starting';
+      void operation(() => relayController.startRules(configRevision(config))).catch(() => {}).finally(() => { relayAction = ''; });
       return send(res, 202, { accepted: true });
     }
     if (relayController && ['/api/login', '/api/resume'].includes(req.url)) {
@@ -86,6 +146,14 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { connected: state.connected });
     }
     if (!state.connected) return send(res, 401, { error: '請先登入 LINE' });
+    if (req.url === '/api/directory') {
+      const result = await operation(async () => {
+        const rows = await lineDirectory(service);
+        groups = new Map(rows.map(row => [row.id, row.name]));
+        return { endpoints: rows };
+      });
+      return send(res, 200, result);
+    }
     if (req.url === '/api/relay/start' && relayController) {
       const source = groups.get(input.sourceId), destination = groups.get(input.destinationId);
       if (!source || !destination || input.sourceId === input.destinationId) return send(res, 400, { error: '請選擇不同的來源與目的群組' });
@@ -135,12 +203,12 @@ return hardenServer(server);
 async function main() {
 const print = console.log.bind(console);
 for (const method of ['log', 'warn', 'error', 'debug', 'info', 'trace']) console[method] = () => {};
-await prepareDataDirectory();
+const dataDir = await prepareDataDirectory();
 const { LineClient } = await import('./node_modules/@rikaidev/yomi/dist/line/client/index.js');
 guardProtocol(LineClient);
 const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
 const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
-const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, relayController: createRelayController() });
+const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, relayController: createRelayController(), settingsStore: createSettingsStore(dataDir) });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
 server.listen(18765, '127.0.0.1', () => print('LinePort: http://127.0.0.1:18765/'));
 }

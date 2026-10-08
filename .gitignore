@@ -19,3 +19,6 @@ LineCallYomiProbe/
 *session-state*
 *e2ee-cache*
 relay-config*.json
+lineport-rules.json
+lineport-telegram.json
+lineport-*.tmp

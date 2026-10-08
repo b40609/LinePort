@@ -1,0 +1,57 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, appendFile } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { createTelegramClient, createTelegramInbox, telegramMessage } from './telegram.mjs';
+
+const token = '123456:synthetic_token_for_tests_only';
+const update = (id, extra = {}) => ({ update_id: id, message: { message_id: id, chat: { id: -123 }, date: 1000, text: 'synthetic text', ...extra } });
+
+test('Telegram API errors never expose the token or upstream diagnostic strings', async () => {
+  for (const request of [async () => { throw new Error(`https://example/${token}`); }, async () => ({ ok: false, json: async () => ({ error_code: 403, description: token }) })]) {
+    await assert.rejects(createTelegramClient(token, { request }).getMe(), error => !error.message.includes(token) && /Telegram/.test(error.message));
+  }
+});
+
+test('Telegram uses plaintext JSON and validates the acknowledgement and text limit', async () => {
+  const calls = [];
+  const client = createTelegramClient(token, { request: async (url, options) => { calls.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ ok: true, result: { message_id: 7, chat: { id: -123 } } }) }; } });
+  assert.deepEqual(await client.send('-123', '<b>literal</b>'), { id: '-123:7' });
+  assert.deepEqual(calls[0], { chat_id: '-123', text: '<b>literal</b>' });
+  await assert.rejects(client.send('-123', 'a'.repeat(4097)), /4,096/);
+  assert.equal(calls.length, 1);
+  for (const result of [{ message_id: 7 }, { message_id: 7, chat: { id: -456 } }, { message_id: '7', chat: { id: -123 } }]) {
+    const malformed = createTelegramClient(token, { request: async () => ({ ok: true, json: async () => ({ ok: true, result }) }) });
+    assert.equal((await malformed.send('-123', 'synthetic')).id, '');
+  }
+});
+
+test('protected, ephemeral and paid Telegram messages are marked as protected', () => {
+  for (const flags of [{ has_protected_content: true }, { is_paid_post: true }, { is_ephemeral: true }]) assert.equal(telegramMessage(update(1, flags)).protected, true);
+  assert.equal(telegramMessage(update(1)).id, '-123:1');
+});
+
+test('Telegram confirms offsets only after durable persistence and restores messages across restart', async () => {
+  const file = path.join(await mkdtemp(path.join(os.tmpdir(), 'lineport-telegram-')), 'inbox.jsonl');
+  const offsets = [], client = { getUpdates: async offset => { offsets.push(offset); return offset ? [] : [update(10), update(11, { has_protected_content: true }), update(12, { from: { is_bot: true } })]; } };
+  const inbox = await createTelegramInbox(file, client, ['-123']);
+  await inbox.poll();
+  assert.equal(inbox.messages('-123').length, 1);
+  const restarted = await createTelegramInbox(file, client, ['-123']);
+  await restarted.poll();
+  assert.deepEqual(offsets, [0, 13]);
+  assert.equal(restarted.messages('-123')[0].text, 'synthetic text');
+  await appendFile(file, '{"offset":');
+  await assert.rejects(createTelegramInbox(file, client, ['-123']), /Incomplete/);
+});
+
+test('an inbox write failure never acknowledges an update on the next poll', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-inbox-failure-'));
+  // The parent does not exist. The first append fails before the offset can advance.
+  const offsets = [], client = { getUpdates: async offset => { offsets.push(offset); return [update(10)]; } };
+  const inbox = await createTelegramInbox(path.join(directory, 'missing', 'inbox.jsonl'), client, ['-123']);
+  await assert.rejects(inbox.poll());
+  await assert.rejects(inbox.poll());
+  assert.deepEqual(offsets, [0]);
+});

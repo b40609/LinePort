@@ -10,8 +10,8 @@ export function guardProtocol(Client) {
   prototype.sendCompact = async function (...args) {
     const result = await original.apply(this, args);
     if (!result || result.error || result.statusCode >= 400) throw new Error('Protocol transport failed');
-    if (args[1] === 'getRecentMessagesV2' && !Object.hasOwn(result.fields || {}, '0')) {
-      throw new Error('Missing recent-message response');
+    if (['getRecentMessagesV2', 'getPreviousMessagesV2WithRequest'].includes(args[1]) && !Object.hasOwn(result.fields || {}, '0')) {
+      throw new Error('Missing message response');
     }
     return result;
   };

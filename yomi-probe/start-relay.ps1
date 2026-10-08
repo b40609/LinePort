@@ -15,7 +15,9 @@ if ($requestedSource -eq $requestedDestination) { throw 'Source and destination 
 if ($requestedSource -match '[\r\n\x00]' -or $requestedDestination -match '[\r\n\x00]') { throw 'Invalid group name.' }
 function Confirm-RelayState($relayState) {
     if ($relayState.app -ne 'line-relay-bridge') { throw 'Port 18766 is occupied by an old or unknown service. Stop the old relay before upgrading.' }
-    if ($relayState.source -cne $requestedSource -or $relayState.destination -cne $requestedDestination) { throw 'A different route is running. Run stop-relay.ps1 before switching groups.' }
+    if ($env:LINEPORT_CONFIG_REVISION) {
+        if ($relayState.version -ne 3 -or $relayState.revision -cne $env:LINEPORT_CONFIG_REVISION) { throw 'Different rules are running. Stop the relay before switching rules.' }
+    } elseif ($relayState.version -eq 3 -or $relayState.source -cne $requestedSource -or $relayState.destination -cne $requestedDestination) { throw 'A different route is running. Run stop-relay.ps1 before switching groups.' }
     if ($relayState.phase -eq 'failed') { throw "Relay failed at stage $($relayState.stage). Read docs/TROUBLESHOOTING.md, then stop and restart." }
 }
 $relayUrl = 'http://127.0.0.1:18766/status'
@@ -25,7 +27,7 @@ try {
 } catch { }
 if ($relayState) {
     Confirm-RelayState $relayState
-    if ($relayState.phase -eq 'running') { Write-Output ($relayState | ConvertTo-Json -Compress); return }
+    if ($relayState.phase -in @('running', 'degraded')) { Write-Output ($relayState | ConvertTo-Json -Depth 8 -Compress); return }
 } else {
 $relayNode = (Get-Command node.exe -ErrorAction Stop).Source
 $relayScript = Join-Path $PSScriptRoot 'relay.mjs'
@@ -49,7 +51,7 @@ for ($relayAttempt = 0; $relayAttempt -lt 120; $relayAttempt++) {
     } catch { }
     if ($relayState) {
         Confirm-RelayState $relayState
-        if ($relayState.phase -eq 'running') { Write-Output ($relayState | ConvertTo-Json -Compress); return }
+        if ($relayState.phase -in @('running', 'degraded')) { Write-Output ($relayState | ConvertTo-Json -Depth 8 -Compress); return }
     }
 }
 throw 'Relay did not become ready. Check http://127.0.0.1:18766/status'

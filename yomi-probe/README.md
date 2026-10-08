@@ -1,11 +1,14 @@
-# LinePort：登入、一般群組收訊與轉送
+# LinePort v0.3.0
 
-從 [專案 README](../README.md) 開始。第一次安裝請看 [安裝教學](../docs/INSTALL.md)，日常操作見 [使用教學](../docs/USAGE.md)，故障見 [疑難排解](../docs/TROUBLESHOOTING.md)。
+LINE／Telegram 多來源、多目的純文字轉送。從 [專案 README](../README.md) 開始。
 
 - `npm ci --ignore-scripts`：安裝固定依賴。
-- `npm test`：執行模擬測試，不發真實訊息。
-- `npm start`：啟動本機登入頁。
-- `start-relay.ps1 -Interactive`：貼上完整來源／目的名稱後啟動背景轉送。
-- `stop-relay.ps1`：停止由此專案啟動器啟動的背景轉送。
+- `npm test`：模擬測試，不讀取真實憑證、不發真實訊息。
+- `npm start`：啟動本機設定頁 18765。
+- `node ui-mock.mjs`：啟動獨立示範頁 18767，不連線 LINE／Telegram；輸入 stop 或 Ctrl+C 停止，10 分鐘自動結束。
+- `stop-relay.ps1`：停止此 checkout 啟動器建立的背景程序。
+- `start-relay.ps1 -Interactive`：保留的舊版單配對名稱設定；新版請從網頁保存並啟動多規則。
 
-本工具使用非官方個人 LINE 協定，有帳號限制風險。登入與 E2EE 資料不得分享；[安全說明](../SECURITY.md) 有完整限制與修正紀錄。
+[安裝](../docs/INSTALL.md) · [使用與更新](../docs/USAGE.md) · [疑難排解](../docs/TROUBLESHOOTING.md) · [架構](../docs/ARCHITECTURE.md) · [驗證](VERIFICATION.md)
+
+登入、E2EE、Bot Token 及 Telegram 來源文字保存在本機，勿分享。[安全說明](../SECURITY.md)

@@ -1,30 +1,32 @@
 # LinePort
 
-在 Windows 背景轉送 LINE 一般群組的新文字訊息。使用個人帳號，來源群組不需加入 Bot，不占用滑鼠或鍵盤。
+在 Windows 背景轉送 LINE 與 Telegram 的新文字訊息。v0.3.0 支援多個來源、多個目的，以及群組／個人聊天室。
 
-[快速開始](#快速開始) · [使用教學](docs/USAGE.md) · [運作原理](docs/ARCHITECTURE.md) · [安全說明](SECURITY.md)
-
-![操作介面：連結帳號、選擇群組、啟動轉送](docs/assets/preview.png)
-
-畫面使用示範資料。
+[下載最新版 ZIP](https://github.com/b40609/LinePort/archive/refs/heads/master.zip) · [使用教學](docs/USAGE.md) · [運作原理](docs/ARCHITECTURE.md) · [安全說明](SECURITY.md)
 
 ## 功能
 
-- **群組選單**：讀取已加入的群組，直接選擇來源與目的，支援 emoji。
-- **背景轉送**：從網頁啟動、停止及查看狀態；關閉網頁仍持續執行。
-- **歷史排除**：首次啟動建立基準，依訊息 ID 去重；重啟沿用處理紀錄。
-- **訊息預覽**：查看最近 50 則訊息，匯出本次預覽為 JSON。
+- **多來源、多目的**：每個來源轉到所有選取目的；可建立多條規則，分別啟用或暫停。
+- **跨平台**：LINE → LINE、LINE → Telegram、Telegram → LINE、Telegram → Telegram。
+- **群組與個人**：LINE 已加入群組與好友；Telegram Bot 可存取的群組、頻道與私訊。
+- **文字篩選**：包含／排除關鍵字、加上訊息前綴。
+- **獨立狀態**：各來源讀取診斷，各配對待送、成功與略過數；一個目的受阻時，其他配對繼續。
+- **保存與去重**：首次略過歷史，同一規則重啟沿用紀錄；以平台與聊天室 ID 辨識，同名群組可分開選。
+- **LINE 補讀**：近期 50 則不足時，分頁查詢；最多 1,000 則，無法追到基準時顯示錯誤。
+- **安全預覽**：LINE 最近訊息與 JSON 匯出，不負責發送。
 
 | 項目 | 支援範圍 |
 | --- | --- |
-| 平台 | Windows 11；實測 Node.js 26.4.0 |
-| 來源與目的 | LINE 一般群組 → LINE 一般群組 |
-| 內容 | 可解密的文字；單帳號、單組轉送規則 |
-| 未支援 | OpenChat、Telegram、圖片、條件篩選、多來源、完整聊天封存 |
+| 系統 | Windows 11；實測 Node.js 26.4.0 |
+| LINE | 非官方個人帳號協定；已加入的一般群組、好友私訊 |
+| Telegram | 官方 Bot API；Bot 有權限讀取／發送的聊天室 |
+| 訊息 | 可讀取的純文字；不保留原發訊者身分 |
+| 規則上限 | 30 條；每條 1–10 個來源、1–10 個目的；合計最多 100 組啟用配對 |
+| 未支援 | LINE 社群 OpenChat、Discord、Slack、圖片／檔案／貼圖、完整聊天封存 |
 
 ## 快速開始
 
-安裝 [Node.js](https://nodejs.org/)，下載本專案並解壓縮。在專案目錄開啟 PowerShell：
+安裝 [Node.js](https://nodejs.org/)，下載並解壓縮本專案。在專案目錄開啟 PowerShell：
 
 ```powershell
 cd yomi-probe
@@ -32,35 +34,44 @@ npm.cmd ci --ignore-scripts
 npm.cmd start
 ```
 
-1. 開啟 http://127.0.0.1:18765/，按「手機授權登入」；已有登入資料則按「使用已保存的登入」。
-2. 在手機 LINE 完成授權，按「載入群組列表」。
-3. 選擇來源與目的，按「開始轉送」。
-4. 等狀態顯示「轉送中」，在來源發一則新文字，確認目的收到。
+開啟 http://127.0.0.1:18765/：
 
-來源與目的必須是帳號已加入、名稱不重複的不同群組。電腦需持續連網且不休眠。詳細步驟見 [安裝教學](docs/INSTALL.md)；舊版使用者請先看 [更新方式](docs/USAGE.md#更新)。
+1. 使用 LINE 時，完成手機授權或恢復登入，按「載入 LINE 群組與好友」。
+2. 使用 Telegram 時，在頁面連結並保存自己的 Bot Token，再載入 Bot 聊天室或手動加入 ID。
+3. 選取來源與目的，按住 Ctrl 可多選，按「新增並保存規則」。
+4. 按「開始轉送」，等基準完成後，在來源發新文字確認目的收到。
+
+只使用 Telegram 時不必登入 LINE。Telegram 來源是 Bot 可收到的訊息，並非登入個人 Telegram 帳號讀取所有聊天。電腦需保持連網、不休眠。
+
+[安裝教學](docs/INSTALL.md) · [Telegram 權限與設定](docs/USAGE.md#telegram) · [舊版更新](docs/USAGE.md#更新)
 
 ## 運作方式
 
-透過 [Yomi](https://github.com/RikaiDev/yomi) 的非官方 LINE 協定恢復登入、讀取／解密與發訊。本專案負責輪詢、去重及保存處理結果，不需要 AI。
+LINE 透過 [Yomi](https://github.com/RikaiDev/yomi) 讀取／解密及加密發送；Telegram 使用 [官方 Bot API](https://core.telegram.org/bots/api)。本專案負責規則、輪詢、篩選與保存，不需要 AI。
 
 ```mermaid
 flowchart LR
-    A[來源群組] -->|近期 50 則| B[Yomi 讀取與解密]
-    B --> C[排除歷史與已處理 ID]
-    C --> D[先保存 sending 紀錄]
-    D --> E[Yomi 加密與發送]
-    E --> F[目的群組]
-    E --> G[保存結果]
+    L[LINE 群組與好友] --> R[來源共用讀取]
+    T[Telegram Bot 訊息] --> R
+    R --> F[歷史排除、去重、關鍵字]
+    F --> J[各配對先保存 sending]
+    J --> DL[LINE 目的]
+    J --> DT[Telegram 目的]
+    DL --> S[保存回應 ID 與結果]
+    DT --> S
 ```
 
-每輪完成後等待 3 秒；同批發訊間隔至少 1 秒。發送結果不明時停止，不自動重送。詳細時序、失敗分支與重啟行為見 [架構文件](docs/ARCHITECTURE.md)。下載後可開啟 [互動流程示範](docs/flow.html) 逐步播放；GitHub 不執行 HTML 動畫。
+每輪完成後等待 3 秒；同一目的依序發送，間隔至少 1.1 秒。來源讀取失敗採退避重試；發送結果不明則持續暫停該配對，重啟也不自動重送。重複配對、自我轉送與規則循環會被阻擋；工具自己送出的訊息另保存 ID，避免再次接力轉送。
 
 ## 使用限制
 
-- 非官方個人帳號自動化有功能限制或停權風險，不能保證不封號。來源沒有 Bot 成員不代表平台無法偵測。[LINE 條款](https://terms.line.me/line_terms?lang=zh-Hant)
-- 目的訊息由登入帳號重新發送；不保留原發訊者身分。登入可能使官方電腦版 LINE 登出。
-- 最近 50 則視窗、斷線、休眠與結果不明皆可能造成漏訊；目前沒有完整送達保證。
-- 登入與 E2EE 資料保存在 `%LOCALAPPDATA%\LineCallYomiProbe`，限制 Windows 存取權限但未加密。不要分享或雲端同步此目錄。[安全說明](SECURITY.md)
+- LINE 使用非官方個人帳號協定，有功能限制或停權風險；登入可能使官方電腦版 LINE 登出。[LINE 條款](https://terms.line.me/line_terms?lang=zh-Hant)
+- 目的訊息由登入 LINE 帳號或 Telegram Bot 重新發送，不保留原發訊者身分。
+- 休眠、斷線、查詢上限、首次基準與發送結果不明皆可能造成漏訊，沒有完整送達保證。
+- Telegram 受 Bot 權限、隱私模式、其他輪詢程序與 Webhook 影響；受保護內容及 Bot 訊息不轉送。
+- 登入、E2EE、Bot Token 與 Telegram 來源文字保存在本機，限制 Windows 存取權限但未加密；勿分享或雲端同步資料目錄。
+
+新版多目的與 Telegram 已完成模擬測試，尚未做真人跨平台收送與朋友端長時間驗證。[驗證紀錄](yomi-probe/VERIFICATION.md)
 
 ## 開發與文件
 
@@ -69,12 +80,12 @@ cd yomi-probe
 npm.cmd test
 ```
 
-測試使用模擬服務，不讀取真實登入資料、不對 LINE 發訊。
+測試使用模擬服務，不讀取真實登入資料、不發真實 LINE／Telegram 訊息。介面模擬可執行 `node ui-mock.mjs`，使用 18767 埠。
 
-[安裝](docs/INSTALL.md) · [使用與更新](docs/USAGE.md) · [疑難排解](docs/TROUBLESHOOTING.md) · [架構](docs/ARCHITECTURE.md) · [驗證紀錄](yomi-probe/VERIFICATION.md)
+[疑難排解](docs/TROUBLESHOOTING.md) · [架構](docs/ARCHITECTURE.md) · [安全](SECURITY.md)
 
-現行程式位於 `yomi-probe/`。`src/`、`scripts/`、`package/` 為早期 Windows 通知診斷實驗，不屬於目前轉送流程。
+現行程式位於 `yomi-probe/`。`src/`、`scripts/`、`package/` 為早期 Windows 通知診斷實驗。[早期單配對流程示範](docs/flow.html) 保留作參考。
 
 ## 授權
 
-本專案採 [MIT License](LICENSE)。核心依賴 `@rikaidev/yomi` 0.5.0，MIT，Copyright 2026 RikaiDev；完整來源見 [第三方聲明](THIRD_PARTY_NOTICES.md)。本工具與 LINE、Yomi 無官方關係。
+[MIT License](LICENSE)。核心依賴 `@rikaidev/yomi` 0.5.0，MIT，Copyright 2026 RikaiDev；見 [第三方聲明](THIRD_PARTY_NOTICES.md)。本工具與 LINE、Yomi 無官方關係。

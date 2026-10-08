@@ -13,4 +13,8 @@ test('resolved timeouts and HTTP errors cannot masquerade as empty recent messag
   }
   client.reply = { statusCode: 200, fields: { 0: [] } };
   assert.equal(await client.sendCompact('/S4', 'getRecentMessagesV2', []), client.reply);
+  client.reply = { statusCode: 200, fields: {} };
+  await assert.rejects(() => client.sendCompact('/S4', 'getPreviousMessagesV2WithRequest', []));
+  client.reply = { statusCode: 200, fields: { 0: [] } };
+  assert.equal(await client.sendCompact('/S4', 'getPreviousMessagesV2WithRequest', []), client.reply);
 });

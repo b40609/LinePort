@@ -13,13 +13,13 @@ export function authorized(req, token) {
   const expected = Buffer.from(token);
   return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
-export async function readJson(req) {
+export async function readJson(req, limit = 4096) {
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) throw new HttpError(415, '請使用 JSON 請求');
   const parts = [];
   let size = 0;
   for await (const part of req) {
     size += part.length;
-    if (size > 4096) throw new HttpError(413, '請求內容過大');
+    if (size > limit) throw new HttpError(413, '請求內容過大');
     parts.push(part);
   }
   try {

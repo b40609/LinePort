@@ -7,8 +7,10 @@ import { prepareDataDirectory } from './runtime.mjs';
 import { guardProtocol } from './protocol-guard.mjs';
 import { inspectRelayRead, requireRelayEncryption } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
+import { runMultiRelay } from './multi-relay.mjs';
 for (const key of ['log', 'warn', 'error', 'debug', 'info', 'trace']) console[key] = () => {};
 const state = { app: 'line-relay-bridge', version: 2, pid: process.pid, phase: 'starting', source: process.env.LINECALL_SOURCE || '來源1', destination: process.env.LINECALL_DESTINATION || '目的2', intervalSeconds: 3, retrySeconds: 0, consecutiveErrors: 0, startedAt: null, polls: 0, forwarded: 0, uncertain: 0, errors: 0, lastPoll: null, stage: 'start' };
+if (process.env.LINEPORT_CONFIG_REVISION) Object.assign(state, { version: 3, revision: process.env.LINEPORT_CONFIG_REVISION });
 const server = http.createServer((req, res) => {
   if (!localRequest(req, 18766) || req.url !== '/status' || req.method !== 'GET') { res.writeHead(403); res.end(); return; }
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'", 'Referrer-Policy': 'no-referrer' });
@@ -22,6 +24,10 @@ state.stage = 'data_permissions';
 const dataDir = await prepareDataDirectory();
 const { LineClient } = await import('./node_modules/@rikaidev/yomi/dist/line/client/index.js');
 guardProtocol(LineClient);
+if (process.env.LINEPORT_CONFIG_REVISION) {
+  const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
+  await runMultiRelay(state, dataDir, { createLineService: async () => new LineProtocolService() });
+} else {
 const routeKey = createHash('sha256').update(JSON.stringify([state.source, state.destination])).digest('hex').slice(0, 24);
 const journal = path.join(dataDir, state.source === '來源1' && state.destination === '目的2'
   ? 'relay-source1-destination2.jsonl' : `relay-${routeKey}.jsonl`);
@@ -82,4 +88,5 @@ let startedAt = saved.startedAt;
     setTimeout(poll, (state.retrySeconds || 3) * 1000);
   }
   await poll();
+}
 } catch { state.phase = 'failed'; state.errors++; }
