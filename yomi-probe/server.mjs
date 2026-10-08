@@ -124,4 +124,4 @@ const server = http.createServer(async (req, res) => {
   } catch (error) { send(res, 500, { error: failure(error) }); }
 });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
-server.listen(port, '127.0.0.1', () => print(`LineCall ordinary-group probe: ${origin}`));
+server.listen(port, '127.0.0.1', () => print(`LINE Relay Bridge: ${origin}`));

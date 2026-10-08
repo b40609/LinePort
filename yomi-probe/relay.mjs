@@ -1,12 +1,13 @@
 import http from 'node:http';
 import path from 'node:path';
 import { mkdir, readFile, appendFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { unseenText } from './relay-rules.mjs';
 const dataDir = path.join(process.env.LOCALAPPDATA, 'LineCallYomiProbe');
 process.env.YOMI_DATA_DIR = dataDir;
 process.env.YOMI_NO_KEYCHAIN = '1';
 for (const key of ['log', 'warn', 'error', 'debug', 'info', 'trace']) console[key] = () => {};
-const state = { phase: 'starting', source: '來源1', destination: '目的2', intervalSeconds: 3, startedAt: null, polls: 0, forwarded: 0, uncertain: 0, errors: 0, lastPoll: null, stage: 'start' };
+const state = { phase: 'starting', source: process.env.LINECALL_SOURCE || '來源1', destination: process.env.LINECALL_DESTINATION || '目的2', intervalSeconds: 3, startedAt: null, polls: 0, forwarded: 0, uncertain: 0, errors: 0, lastPoll: null, stage: 'start' };
 const server = http.createServer((req, res) => {
   if (req.headers.host !== '127.0.0.1:18766' || req.url !== '/status' || req.method !== 'GET') { res.writeHead(403); res.end(); return; }
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -14,7 +15,9 @@ const server = http.createServer((req, res) => {
 });
 server.on('error', () => process.exit(1));
 await new Promise(resolve => server.listen(18766, '127.0.0.1', resolve));
-const journal = path.join(dataDir, 'relay-source1-destination2.jsonl');
+const routeKey = createHash('sha256').update(JSON.stringify([state.source, state.destination])).digest('hex').slice(0, 24);
+const journal = path.join(dataDir, state.source === '來源1' && state.destination === '目的2'
+  ? 'relay-source1-destination2.jsonl' : `relay-${routeKey}.jsonl`);
 const seen = new Set();
 let startedAt;
 async function record(row) { await appendFile(journal, JSON.stringify(row) + '\n', 'utf8'); }

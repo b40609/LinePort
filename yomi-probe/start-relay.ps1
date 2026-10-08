@@ -1,4 +1,10 @@
+param(
+    [string]$SourceName = '',
+    [string]$DestinationName = ''
+)
 $ErrorActionPreference = 'Stop'
+if ($SourceName) { $env:LINECALL_SOURCE = $SourceName }
+if ($DestinationName) { $env:LINECALL_DESTINATION = $DestinationName }
 $relayUrl = 'http://127.0.0.1:18766/status'
 try {
     $relayState = Invoke-RestMethod -Uri $relayUrl -TimeoutSec 2

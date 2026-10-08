@@ -1,5 +1,5 @@
 {
-  "name": "linecall-yomi-probe",
+  "name": "line-relay-bridge",
   "private": true,
   "type": "module",
   "scripts": { "start": "node server.mjs", "relay": "node relay.mjs", "test": "node --test relay-rules.test.mjs" },
