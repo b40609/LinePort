@@ -1,5 +1,5 @@
 {
-  "name": "line-relay-bridge",
+  "name": "lineport",
   "private": true,
   "type": "module",
   "scripts": { "start": "node server.mjs", "relay": "node relay.mjs", "test": "node --test *.test.mjs" },

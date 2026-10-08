@@ -140,7 +140,7 @@ const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist
 const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
 const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, relayController: createRelayController() });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
-server.listen(18765, '127.0.0.1', () => print('LINE Relay Bridge: http://127.0.0.1:18765/'));
+server.listen(18765, '127.0.0.1', () => print('LinePort: http://127.0.0.1:18765/'));
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(() => { process.stderr.write('Startup failed; check data permissions and dependencies.\n'); process.exitCode = 1; });

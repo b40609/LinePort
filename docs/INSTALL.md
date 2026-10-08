@@ -10,7 +10,7 @@
 
 ## 安裝依賴
 
-從 [GitHub](https://github.com/b40609/line-relay-bridge) 選擇 **Code → Download ZIP**，解壓縮。於專案資料夾的檔案總管網址列輸入 `powershell`，執行：
+從 [GitHub](https://github.com/b40609/LinePort) 選擇 **Code → Download ZIP**，解壓縮。於專案資料夾的檔案總管網址列輸入 `powershell`，執行：
 
 ```powershell
 cd yomi-probe

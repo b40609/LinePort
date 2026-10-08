@@ -1,4 +1,4 @@
-# LINE Relay Bridge
+# LinePort
 
 在 Windows 背景轉送 LINE 一般群組的新文字訊息。使用個人帳號，來源群組不需加入 Bot，不占用滑鼠或鍵盤。
 

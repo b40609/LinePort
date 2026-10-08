@@ -1,4 +1,4 @@
-# LINE Relay Bridge：登入、一般群組收訊與轉送
+# LinePort：登入、一般群組收訊與轉送
 
 從 [專案 README](../README.md) 開始。第一次安裝請看 [安裝教學](../docs/INSTALL.md)，日常操作見 [使用教學](../docs/USAGE.md)，故障見 [疑難排解](../docs/TROUBLESHOOTING.md)。
 
