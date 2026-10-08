@@ -6,9 +6,9 @@ import { once } from 'node:events';
 import { createProbeServer } from './server.mjs';
 
 const fakeToken = 'test-only-token';
-async function setup(t, overrides = {}) {
+async function setup(t, overrides = {}, relayController) {
   const service = Object.assign(new EventEmitter(), { resumeSession: async () => true, client: { getAllChatMids: async () => ({ memberChats: [] }), getChats: async () => [] } }, overrides);
-  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin: async () => {} });
+  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin: async () => {}, relayController });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
@@ -80,4 +80,51 @@ test('upstream exceptions never reveal sensitive context', async t => {
   assert.equal(result.status, 500);
   assert.ok(!result.body.includes('SYNTHETIC_SECRET'));
   assert.ok(!(await call('/api/status', undefined, {}, 'GET')).body.includes('SYNTHETIC_SECRET'));
+});
+
+test('relay start validates membership, different IDs and unique names before dispatch', async t => {
+  const routes = [];
+  const { call } = await setup(t, { client: {
+    getAllChatMids: async () => ({ memberChats: ['c1', 'c2', 'c3', 'c4'] }),
+    getChats: async () => ['來源🔥', '測試✅', '重名', '重名'].map((chatName, i) => ({ chatMid: 'c' + (i + 1), chatName })),
+  } }, { status: async () => ({ phase: 'stopped' }), start: async (...route) => { routes.push(route); }, stop: async () => {} });
+  assert.equal((await call('/api/relay/start', '{}')).status, 401);
+  await call('/api/resume');
+  await call('/api/groups');
+  for (const route of [{ sourceId: 'evil', destinationId: 'c2' }, { sourceId: 'c1', destinationId: 'c1' }, { sourceId: 'c3', destinationId: 'c2' }]) {
+    assert.equal((await call('/api/relay/start', JSON.stringify(route))).status, 400);
+  }
+  assert.equal((await call('/api/relay/start', JSON.stringify({ sourceId: 'c1', destinationId: 'c2' }))).status, 202);
+  assert.deepEqual(routes, [['來源🔥', '測試✅']]);
+});
+
+test('relay actions are asynchronous, serialized and failure details are redacted', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const { call } = await setup(t, {}, { status: async () => ({ phase: 'running' }), stop: async () => { await gate; throw new Error('SYNTHETIC_PRIVATE_PATH'); } });
+  assert.equal((await call('/api/relay/stop', 'null')).status, 400);
+  assert.equal((await call('/api/relay/stop')).status, 202);
+  assert.equal(JSON.parse((await call('/api/relay/status', undefined, {}, 'GET')).body).action, 'stopping');
+  assert.equal((await call('/api/resume')).status, 409);
+  assert.equal((await call('/api/relay/stop', '{}', { 'X-Probe-Token': 'wrong' })).status, 403);
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  const result = await call('/api/status', undefined, {}, 'GET');
+  assert.equal(JSON.parse(result.body).busy, false);
+  assert.ok(!result.body.includes('SYNTHETIC_PRIVATE_PATH'));
+});
+
+test('account operations require a stopped relay, including unknown status', async t => {
+  let resumes = 0;
+  let phase = 'running';
+  const { call } = await setup(t, { resumeSession: async () => { resumes++; return true; } }, { status: async () => ({ phase }) });
+  for (phase of ['running', 'starting', 'legacy', 'unavailable', 'failed']) {
+    assert.equal((await call('/api/resume')).status, 409);
+    assert.equal((await call('/api/login', JSON.stringify({ phone: '0912345678' }))).status, 409);
+  }
+  assert.equal(resumes, 0);
+  phase = 'stopped';
+  assert.equal((await call('/api/resume')).status, 200);
+  assert.equal(resumes, 1);
 });

@@ -19,3 +19,10 @@
 - [Microsoft：Notification listener](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/app-notifications/notification-listener)。
 - [Microsoft：Grant package identity](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps)。
 - `Microsoft.Data.Sqlite`、`SQLitePCLRaw.bundle_e_sqlite3`：版本見 `.csproj`，各套件授權以 NuGet 套件隨附聲明為準。
+
+## 文件結構參考
+
+- [ntfy](https://github.com/binwiederhier/ntfy)：產品簡介、操作畫面與文件入口。
+- [Matterbridge](https://github.com/42wim/matterbridge)：支援範圍與設定說明。
+
+僅參考文件組織方式，未複製程式碼、品牌圖像或文案。介面採 LINE 風格綠色與系統字型，未使用 LINE 官方商標或專有字型。

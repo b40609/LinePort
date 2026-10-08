@@ -6,12 +6,14 @@ import { randomBytes } from 'node:crypto';
 import { authorized, readJson, localRequest, hardenServer, HttpError } from './local-http.mjs';
 import { prepareDataDirectory } from './runtime.mjs';
 import { guardProtocol } from './protocol-guard.mjs';
+import { createRelayController } from './relay-controller.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-export function createProbeServer({ service, runPwlessLogin, port = 18765, token = randomBytes(32).toString('hex') }) {
+export function createProbeServer({ service, runPwlessLogin, relayController, port = 18765, token = randomBytes(32).toString('hex') }) {
 service.on('error', () => {});
 const state = { phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
 let groups = new Map();
+let relayAction = '';
 
 function failure(error) {
   const code = error?.code;
@@ -42,11 +44,23 @@ const server = http.createServer(async (req, res) => {
     }
     if (!authorized(req, token)) return send(res, 403, { error: '請從本機首頁開啟' });
     if (req.method === 'GET' && req.url === '/api/status') return send(res, 200, state);
+    if (req.method === 'GET' && req.url === '/api/relay/status') return send(res, 200, { ...(relayController ? await relayController.status() : { phase: 'unavailable' }), action: relayAction });
     if (req.method !== 'POST') return send(res, 404, { error: '找不到操作' });
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
     const input = await readJson(req);
     // Body streams can overlap. Recheck after awaiting the body, before starting work.
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
+    if (req.url === '/api/relay/stop' && relayController) {
+      relayAction = 'stopping';
+      void operation(() => relayController.stop()).catch(() => {}).finally(() => { relayAction = ''; });
+      return send(res, 202, { accepted: true });
+    }
+    if (relayController && ['/api/login', '/api/resume'].includes(req.url)) {
+      const relay = await relayController.status();
+      if (relay.phase !== 'stopped') return send(res, 409, { error: '請先停止轉送，再連結帳號；無法確認狀態時請先排查本機服務' });
+      // Status lookup yields to the event loop; another request may have acquired the lock.
+      if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
+    }
     if (req.url === '/api/login') {
       if (state.connected) return send(res, 409, { error: '已登入，請直接讀取群組' });
       let phone = String(input.phone || '').replace(/[\s-]/g, '');
@@ -70,6 +84,14 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { connected: state.connected });
     }
     if (!state.connected) return send(res, 401, { error: '請先登入 LINE' });
+    if (req.url === '/api/relay/start' && relayController) {
+      const source = groups.get(input.sourceId), destination = groups.get(input.destinationId);
+      if (!source || !destination || input.sourceId === input.destinationId) return send(res, 400, { error: '請選擇不同的來源與目的群組' });
+      if ([source, destination].some(name => /[\r\n\x00]/.test(name) || [...groups.values()].filter(value => value === name).length !== 1)) return send(res, 400, { error: '群組名稱重複或含無法使用的字元，請先調整群名' });
+      relayAction = 'starting';
+      void operation(() => relayController.start(source, destination)).catch(() => {}).finally(() => { relayAction = ''; });
+      return send(res, 202, { accepted: true });
+    }
     if (req.url === '/api/groups') {
       const result = await operation(async () => {
         const directory = await service.client.getAllChatMids();
@@ -116,7 +138,7 @@ const { LineClient } = await import('./node_modules/@rikaidev/yomi/dist/line/cli
 guardProtocol(LineClient);
 const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
 const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
-const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin });
+const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, relayController: createRelayController() });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
 server.listen(18765, '127.0.0.1', () => print('LINE Relay Bridge: http://127.0.0.1:18765/'));
 }
