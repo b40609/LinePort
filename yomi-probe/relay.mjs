@@ -5,6 +5,8 @@ import { appendRecord, loadJournal, establishBaseline, forwardBatch } from './re
 import { localRequest, hardenServer } from './local-http.mjs';
 import { prepareDataDirectory } from './runtime.mjs';
 import { guardProtocol } from './protocol-guard.mjs';
+import { inspectRelayRead, requireRelayEncryption } from './relay-health.mjs';
+import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
 for (const key of ['log', 'warn', 'error', 'debug', 'info', 'trace']) console[key] = () => {};
 const state = { app: 'line-relay-bridge', version: 2, pid: process.pid, phase: 'starting', source: process.env.LINECALL_SOURCE || '來源1', destination: process.env.LINECALL_DESTINATION || '目的2', intervalSeconds: 3, retrySeconds: 0, consecutiveErrors: 0, startedAt: null, polls: 0, forwarded: 0, uncertain: 0, errors: 0, lastPoll: null, stage: 'start' };
 const server = http.createServer((req, res) => {
@@ -45,6 +47,11 @@ let startedAt = saved.startedAt;
   if (source === destination) throw new Error('Same group');
   state.stage = 'route_identity';
   if (!service.profile?.mid) throw new Error('Missing account identity');
+  state.stage = 'e2ee_keys';
+  requireRelayEncryption(service);
+  state.stage = 'destination_e2ee';
+  await prepareRelayDestination(service, destination);
+  state.stage = 'route_identity';
   const routeIdentity = createHash('sha256').update(JSON.stringify([service.profile.mid, source, destination])).digest('hex');
   if (saved.routeIdentity && saved.routeIdentity !== routeIdentity) throw new Error('Route identity changed');
   if (!saved.routeIdentity) await record({ routeIdentity });
@@ -62,7 +69,8 @@ let startedAt = saved.startedAt;
       const messages = await service.getRecentMessages(source, 50);
       if (service.loginRequired) { state.stage = 'login_required'; throw new Error('Login required'); }
       state.polls++; state.lastPoll = new Date().toISOString();
-      await forwardBatch({ messages, seen, startedAt, record, send: text => service.sendMessage(destination, text), state });
+      state.lastRead = inspectRelayRead(messages, seen, startedAt);
+      await forwardBatch({ messages, seen, startedAt, record, send: text => sendRelayText(service, destination, text), state });
       state.consecutiveErrors = 0; state.retrySeconds = 0;
       state.stage = 'waiting';
     } catch {

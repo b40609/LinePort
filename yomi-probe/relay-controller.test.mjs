@@ -28,3 +28,17 @@ test('status only exposes known fields and distinguishes unavailable services', 
   assert.equal((await createRelayController({ request: async () => { throw new Error('timeout'); } }).status()).phase, 'unavailable');
   assert.equal((await createRelayController({ request: async () => { throw Object.assign(new Error('offline'), { cause: { code: 'ECONNREFUSED' } }); } }).status()).phase, 'stopped');
 });
+
+test('decrypt failures are visible without exposing upstream diagnostics or message content', async () => {
+  const request = async () => ({ ok: true, json: async () => ({ app: 'line-relay-bridge', phase: 'running', lastRead: { received: 4, decryptFailed: 2, text: 'SYNTHETIC_SECRET', eligible: -1 } }) });
+  const state = await createRelayController({ request }).status();
+  assert.match(state.warning, /無法解密/);
+  assert.equal(state.lastRead.eligible, 0);
+  assert.ok(!JSON.stringify(state).includes('SYNTHETIC_SECRET'));
+});
+
+test('startup errors report the failed relay stage without subprocess output', async () => {
+  const request = async () => ({ ok: true, json: async () => ({ app: 'line-relay-bridge', phase: 'failed', stage: 'e2ee_keys' }) });
+  const controller = createRelayController({ request, run: async () => { throw new Error('SYNTHETIC_SECRET'); } });
+  await assert.rejects(controller.start('來源', '目的'), error => /加解密金鑰/.test(error.message) && !error.message.includes('SYNTHETIC_SECRET'));
+});

@@ -7,6 +7,7 @@ import { authorized, readJson, localRequest, hardenServer, HttpError } from './l
 import { prepareDataDirectory } from './runtime.mjs';
 import { guardProtocol } from './protocol-guard.mjs';
 import { createRelayController } from './relay-controller.mjs';
+import { RelayError } from './relay-health.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 export function createProbeServer({ service, runPwlessLogin, relayController, port = 18765, token = randomBytes(32).toString('hex') }) {
@@ -16,6 +17,7 @@ let groups = new Map();
 let relayAction = '';
 
 function failure(error) {
+  if (error instanceof RelayError) return error.message;
   const code = error?.code;
   const suffix = typeof code === 'number' ? ` (${code})` : '';
   return `操作失敗${suffix}；請確認手機授權、網路及 LINE 登入狀態後重試。`;

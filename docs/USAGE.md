@@ -38,8 +38,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\yomi-probe\stop-relay.ps1
 | `polls` / `lastPoll` | 成功讀取次數／時間 |
 | `uncertain` | 無法確認送達，不會自動重送 |
 | `errors` / `retrySeconds` | 累計錯誤／讀取重試等待秒數 |
+| `lastRead` | 最近一輪的讀取、符合轉送條件、解密失敗及時間略過數；不含訊息文字 |
 
 計數於程序重啟歸零；去重紀錄保留。讀取失敗依序等待 3、6、12、24 秒，第 5 次連續失敗停止。發送結果不明或紀錄寫入失敗立即停止。處理方式見 [疑難排解](TROUBLESHOOTING.md)。
+
+「轉送中」表示輪詢運作；來源有解密失敗或時間異常時，畫面改顯示「轉送受阻」與原因。缺少帳號加解密金鑰或目的群組加密準備失敗會直接阻止啟動。
 
 ## 更新
 

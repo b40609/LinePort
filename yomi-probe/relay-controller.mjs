@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { relayWarning, relayFailure, RelayError } from './relay-health.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const execute = promisify(execFile);
@@ -13,7 +14,7 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
       env: { ...process.env, ...environment },
     });
   }
-  return {
+  const controller = {
     async status() {
       try {
         const response = await request('http://127.0.0.1:18766/status', { signal: AbortSignal.timeout(2000), redirect: 'error' });
@@ -21,15 +22,23 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
         const state = await response.json();
         if (state.app !== 'line-relay-bridge') return { phase: 'legacy' };
         // Only expose known, non-credential status fields to the page.
-        return Object.fromEntries(['phase', 'stage', 'source', 'destination', 'polls', 'forwarded', 'uncertain', 'errors', 'lastPoll', 'retrySeconds'].map(key => [key, state[key]]));
+        const safe = Object.fromEntries(['phase', 'stage', 'source', 'destination', 'polls', 'forwarded', 'uncertain', 'errors', 'lastPoll', 'retrySeconds'].map(key => [key, state[key]]));
+        if (state.lastRead) safe.lastRead = Object.fromEntries(['received', 'eligible', 'decryptFailed', 'invalidTime', 'history'].map(key => [key, Number.isSafeInteger(state.lastRead[key]) && state.lastRead[key] >= 0 ? state.lastRead[key] : 0]));
+        safe.warning = relayWarning(safe);
+        return safe;
       } catch (error) {
         return { phase: error?.cause?.code === 'ECONNREFUSED' ? 'stopped' : 'unavailable' };
       }
     },
-    start(source, destination) {
+    async start(source, destination) {
       // Names travel as environment values, never as executable command text.
-      return script('start-relay.ps1', { LINECALL_SOURCE: source, LINECALL_DESTINATION: destination });
+      try { await script('start-relay.ps1', { LINECALL_SOURCE: source, LINECALL_DESTINATION: destination }); }
+      catch {
+        const state = await controller.status();
+        throw new RelayError(state.phase === 'failed' ? relayFailure(state.stage) : '轉送啟動器失敗；請確認 Node.js、PowerShell 與 18766 連接埠。');
+      }
     },
     stop() { return script('stop-relay.ps1'); },
   };
+  return controller;
 }

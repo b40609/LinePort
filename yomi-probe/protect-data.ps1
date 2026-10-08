@@ -12,17 +12,21 @@ $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
 $systemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
 foreach ($item in $items) {
     if ($item.PSIsContainer) {
-        $acl = [Security.AccessControl.DirectorySecurity]::new()
         $inheritance = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
     } else {
-        $acl = [Security.AccessControl.FileSecurity]::new()
         $inheritance = [Security.AccessControl.InheritanceFlags]::None
     }
+    # Update only the DACL; replacing a blank descriptor can require SACL privileges.
+    $acl = $item.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
     $acl.SetAccessRuleProtection($true, $false)
+    foreach ($existingRule in $acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier])) {
+        [void]$acl.RemoveAccessRuleSpecific($existingRule)
+    }
     foreach ($sid in @($userSid, $systemSid)) {
         $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', $inheritance, 'None', 'Allow')
         $acl.AddAccessRule($rule)
     }
-    Set-Acl -LiteralPath $item.FullName -AclObject $acl
+    # Avoid Set-Acl module/privilege differences when Node inherits PowerShell 7 paths.
+    $item.SetAccessControl($acl)
 }
 Write-Output 'Local data ACL protected.'
