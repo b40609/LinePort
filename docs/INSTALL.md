@@ -8,7 +8,7 @@ Windows 11、Node.js 與 npm；已驗證 Node.js 26.4.0。一台持續連網、�
 
 ## 安裝與啟動
 
-下載 [最新版 ZIP](https://github.com/b40609/LinePort/archive/refs/heads/master.zip) 並解壓縮。在專案資料夾的檔案總管網址列輸入 `powershell`：
+下載 [v0.5.0 ZIP](https://github.com/b40609/LinePort/releases/download/v0.5.0/LinePort-v0.5.0.zip)（先依 [更新說明](RELEASE-0.5.0.md) 核對 SHA-256） 並解壓縮。在專案資料夾的檔案總管網址列輸入 `powershell`：
 
 ```powershell
 cd yomi-probe

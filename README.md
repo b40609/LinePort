@@ -1,10 +1,10 @@
 # LinePort
 
-在 Windows 背景轉送 LINE 與 Telegram 的新文字訊息。v0.4.0 支援多個來源、多個目的，以及群組／個人聊天室。
+在 Windows 背景轉送 LINE 與 Telegram 的新文字訊息。v0.5.0 支援多個來源、多個目的，以及群組／個人聊天室。
 
-v0.4.0 新增持久待送佇列、公平排程、Telegram 限流等待、容量預警與多視窗設定衝突防護。[更新與驗證](docs/OPTIMIZATION-0.4.0.md) · [檢查結果與優化建議](docs/REVIEW-2026-10-09.md)
+v0.5.0 新增首次引導、規則模擬、權限檢查、逐筆人工處理發送不明、安全診斷與設定備份／還原。保留持久待送佇列及不明發送不自動重送原則。[本版更新與驗證](docs/RELEASE-0.5.0.md) · [後續交接](HANDOFF.md)
 
-[下載最新版 ZIP](https://github.com/b40609/LinePort/archive/refs/heads/master.zip) · [使用教學](docs/USAGE.md) · [運作原理](docs/ARCHITECTURE.md) · [安全說明](SECURITY.md)
+[下載 v0.5.0 ZIP](https://github.com/b40609/LinePort/releases/download/v0.5.0/LinePort-v0.5.0.zip) · [更新與 SHA-256](docs/RELEASE-0.5.0.md) · [使用教學](docs/USAGE.md) · [運作原理](docs/ARCHITECTURE.md) · [安全說明](SECURITY.md)
 
 ## 功能
 

@@ -1,4 +1,4 @@
-# LinePort v0.3.0
+# LinePort v0.5.0
 
 LINE／Telegram 多來源、多目的純文字轉送。從 [專案 README](../README.md) 開始。
 

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile, open, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { HttpError } from './local-http.mjs';
@@ -79,6 +79,16 @@ export function createSettingsStore(directory) {
       catch (error) { if (error.code === 'ENOENT') return { version: 1, rules: [] }; throw error; }
     },
     async save(config) { const normalized = normalizeConfig(config); await atomicJson(configFile, normalized); return normalized; },
+    async restore(config) {
+      const normalized = normalizeConfig(config);
+      const previous = await this.load();
+      const backup = `lineport-settings-before-restore-${randomUUID()}.json`;
+      try {
+        await atomicJson(path.join(directory, backup), previous);
+        await atomicJson(configFile, normalized);
+      } catch { throw new HttpError(409, '設定還原未完成；未取代原設定，請保留已產生的備份並檢查磁碟空間與權限後重試'); }
+      return { config: normalized, backup };
+    },
     async telegramToken() {
       try { return JSON.parse(await readFile(telegramFile, 'utf8')).token || ''; }
       catch (error) { if (error.code === 'ENOENT') return process.env.LINEPORT_TELEGRAM_TOKEN || ''; throw error; }

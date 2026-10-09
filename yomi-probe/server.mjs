@@ -11,9 +11,11 @@ import { RelayError } from './relay-health.mjs';
 import { normalizeConfig, configRevision, createSettingsStore } from './route-config.mjs';
 import { lineDirectory } from './line-directory.mjs';
 import { createTelegramClient } from './telegram.mjs';
+import { previewRules, settingsBackup, validateBackup, safeDiagnostics } from './user-tools.mjs';
+import { createDeliveryReviewStore } from './delivery-review.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-export function createProbeServer({ service, runPwlessLogin, relayController, settingsStore, telegramFactory = createTelegramClient, port = 18765, token = randomBytes(32).toString('hex') }) {
+export function createProbeServer({ service, runPwlessLogin, relayController, settingsStore, reviewStore, telegramFactory = createTelegramClient, port = 18765, token = randomBytes(32).toString('hex') }) {
 service.on('error', () => {});
 const state = { phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
 let groups = new Map();
@@ -24,7 +26,7 @@ async function requireStopped() {
 }
 
 function failure(error) {
-  if (error instanceof RelayError) return error.message;
+  if (error instanceof RelayError || error instanceof HttpError) return error.message;
   const code = error?.code;
   const suffix = typeof code === 'number' ? ` (${code})` : '';
   return `操作失敗${suffix}；請確認手機授權、網路及 LINE 登入狀態後重試。`;
@@ -58,11 +60,57 @@ const server = http.createServer(async (req, res) => {
       const config = await settingsStore.load();
       return send(res, 200, { config, revision: configRevision(config), telegramConfigured: Boolean(await settingsStore.telegramToken()) });
     }
+    if (req.method === 'GET' && req.url === '/api/settings/backup' && settingsStore) return send(res, 200, settingsBackup(await settingsStore.load()));
+    if (req.method === 'GET' && req.url === '/api/diagnostics') return send(res, 200, safeDiagnostics(relayController ? await relayController.status() : {}, state.connected));
+    if (req.method === 'GET' && req.url === '/api/delivery/review' && reviewStore) {
+      await requireStopped();
+      return send(res, 200, await operation(() => reviewStore.list()));
+    }
     if (req.method !== 'POST') return send(res, 404, { error: '找不到操作' });
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
-    const input = await readJson(req, req.url === '/api/rules' ? 65536 : 4096);
+    const input = await readJson(req, ['/api/rules', '/api/rules/preview', '/api/settings/validate', '/api/settings/restore'].includes(req.url) ? 131072 : 4096);
     // Body streams can overlap. Recheck after awaiting the body, before starting work.
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
+    if (req.url === '/api/rules/preview') return send(res, 200, previewRules(input));
+    if (req.url === '/api/delivery/resolve' && reviewStore) {
+      await requireStopped();
+      return send(res, 200, await operation(() => reviewStore.resolve(input)));
+    }
+    if (req.url === '/api/settings/validate') return send(res, 200, { config: validateBackup(input.backup) });
+    if (req.url === '/api/platform/check' && settingsStore) {
+      await requireStopped();
+      const checks = await operation(async () => {
+        const config = await settingsStore.load();
+        const checks = [];
+        const endpoints = config.rules.filter(rule => rule.enabled).flatMap(rule => [...rule.sources, ...rule.destinations]);
+        if (endpoints.some(endpoint => endpoint.platform === 'line')) checks.push({ platform: 'LINE', message: state.connected && service.e2eeManager?.getSelfKeyByMid(service.profile?.mid) ? '已連結並具有本機 E2EE 金鑰；實際聊天室權限仍由平台決定' : '尚未連結或缺少 E2EE 金鑰；相關路線無法啟動，請重新手機授權並載入聊天室' });
+        if (endpoints.some(endpoint => endpoint.platform === 'telegram')) {
+          const client = telegramFactory(await settingsStore.telegramToken());
+          const me = await client.getMe(), webhook = await client.getWebhookInfo();
+          checks.push({ platform: 'Telegram', message: webhook.url ? '已設定 Webhook；收件會衝突，請在原管理工具停用後再啟動' : '未設定 Webhook；請確認沒有其他程式同時輪詢。群組來源需關閉 Privacy Mode 或給 Bot 管理員權限' });
+          for (const endpoint of new Map(endpoints.filter(endpoint => endpoint.platform === 'telegram').map(endpoint => [endpoint.id, endpoint])).values()) {
+            try {
+              const chat = await client.getChat(endpoint.id), member = chat.type === 'private' ? null : await client.getChatMember(endpoint.id, me.id);
+              const unavailable = member && (['left', 'kicked'].includes(member.status) || member.status === 'restricted' && (!member.is_member || member.can_send_messages === false));
+              checks.push({ platform: endpoint.name, message: chat.has_protected_content ? '受保護聊天室，不能作為轉送來源；請改選未受保護來源' : unavailable ? 'Bot 不在聊天室或禁止發送；此路線受阻，請加入 Bot 並調整權限' : chat.type === 'channel' && !(member?.status === 'creator' || member?.can_post_messages) ? '頻道發送權限不足；若作為目的，請授予 Bot 發布訊息權限' : '可存取；未發送測試訊息。私訊需先 Start，來源可讀範圍仍受 Privacy Mode 與平台限制' });
+            } catch (error) { checks.push({ platform: endpoint.name, message: error instanceof RelayError ? error.message + '；請核對 ID、Bot 成員與權限' : '無法確認聊天室權限；請核對 ID 與網路後重試' }); }
+          }
+        }
+        if (!checks.length) checks.push({ platform: '設定', message: '請先保存並啟用至少一條規則，再檢查平台權限' });
+        return checks;
+      });
+      return send(res, 200, { checks });
+    }
+    if (req.url === '/api/settings/restore' && settingsStore) {
+      await requireStopped();
+      const config = validateBackup(input.backup);
+      const result = await operation(async () => {
+        if (input.revision !== configRevision(await settingsStore.load())) throw new HttpError(409, '設定已變更，請重新載入並檢查備份後再還原');
+        if (!settingsStore.restore) throw new HttpError(503, '此環境未提供設定還原');
+        return settingsStore.restore(config);
+      });
+      return send(res, 200, { ...result, revision: configRevision(result.config) });
+    }
     if (req.url === '/api/relay/stop' && relayController) {
       relayAction = 'stopping';
       void operation(() => relayController.stop()).catch(() => {}).finally(() => { relayAction = ''; });
@@ -214,7 +262,7 @@ const { LineClient } = await import('./node_modules/@rikaidev/yomi/dist/line/cli
 guardProtocol(LineClient);
 const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
 const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
-const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, relayController: createRelayController(), settingsStore: createSettingsStore(dataDir) });
+const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir) });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
 server.listen(18765, '127.0.0.1', () => print('LinePort: http://127.0.0.1:18765/'));
 }

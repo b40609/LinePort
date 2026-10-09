@@ -33,6 +33,7 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
             source: endpoint(route.source), destination: endpoint(route.destination), phase: String(route.phase || '').slice(0, 30),
             forwarded: count(route.forwarded), pending: count(route.pending), uncertain: count(route.uncertain), errors: count(route.errors), skipped: count(route.skipped),
             lastSend: typeof route.lastSend === 'string' ? route.lastSend.slice(0, 40) : null, warning: String(route.warning || '').slice(0, 300),
+            retryAt: count(route.retryAt),
           })) : [];
           safe.sources = Array.isArray(state.sources) ? state.sources.slice(0, 100).map(source => ({ ...endpoint(source), polls: count(source.polls), received: count(source.received), decryptFailed: count(source.decryptFailed), lastPoll: typeof source.lastPoll === 'string' ? source.lastPoll.slice(0, 40) : null, warning: String(source.warning || '').slice(0, 300) })) : [];
           safe.warning = ['degraded', 'failed'].includes(state.phase) ? '部分路線受阻，請查看各路線與來源狀態' : '';

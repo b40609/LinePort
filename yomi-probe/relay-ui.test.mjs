@@ -19,13 +19,13 @@ test('running with skipped messages shows a warning and clears it after stopping
   vm.runInContext(source, context);
   nodes.get('notice').textContent = '保留操作錯誤';
   await vm.runInContext('status()', context);
-  assert.equal(nodes.get('relayLabel').textContent, '轉送受阻');
+  assert.equal(nodes.get('relayLabel').textContent, '需要處理');
   assert.equal(nodes.get('relayBadge').classList.contains('live'), false);
   assert.match(nodes.get('readInfo').textContent, /解密失敗 1 則/);
   assert.match(nodes.get('relayNotice').textContent, /無法解密/);
   assert.equal(nodes.get('notice').textContent, '保留操作錯誤');
   relay = { phase: 'stopped' };
   await vm.runInContext('status()', context);
-  assert.equal(nodes.get('relayLabel').textContent, '尚未啟動');
+  assert.equal(nodes.get('relayLabel').textContent, '已停止');
   assert.equal(nodes.get('relayNotice').textContent, '');
 });

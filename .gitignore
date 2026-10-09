@@ -22,3 +22,5 @@ relay-config*.json
 lineport-rules.json
 lineport-telegram.json
 lineport-*.tmp
+lineport-settings*.json
+lineport-diagnostics*.json

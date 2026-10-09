@@ -35,6 +35,7 @@ export function createTelegramClient(token, { request = fetch } = {}) {
     getMe: () => call('getMe'),
     getWebhookInfo: () => call('getWebhookInfo'),
     getChat: id => call('getChat', { chat_id: id }),
+    getChatMember: (id, userId) => call('getChatMember', { chat_id: id, user_id: userId }),
     getUpdates: (offset, timeout = 15) => call('getUpdates', { offset, timeout, limit: 100, allowed_updates: ['message', 'channel_post'] }),
     async send(id, text) {
       if (!text || text.length > 4096) throw new RelayError('Telegram 文字含前綴後不可超過 4,096 字元');

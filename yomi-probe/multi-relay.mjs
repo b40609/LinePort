@@ -8,6 +8,7 @@ import { lineDirectory, readLineSince } from './line-directory.mjs';
 import { requireRelayEncryption, inspectRelayRead, RelayError } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
 import { createTelegramClient, createTelegramInbox, TelegramRateLimit } from './telegram.mjs';
+import { inspectDelivery } from './delivery-review.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -61,15 +62,14 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       cooldowns.set(destination.platform, Math.max(cooldowns.get(destination.platform) || 0, saved.retryAt));
       status.pending = edge.pending.size;
       edge.startedAt = saved.startedAt || now();
-      if (!saved.routeIdentity) await edge.record({ routeIdentity: identity });
-      const journal = await rowsFrom(edge.file), unresolved = new Set();
-      for (const row of journal) {
-        if (row.outcome === 'sending' || row.outcome === 'uncertain') unresolved.add(row.id);
-        if (row.outcome === 'sent' || row.outcome === 'retry') unresolved.delete(row.id);
-      }
+      if (!saved.routeIdentity) await edge.record({ routeIdentity: identity, name: rule.name, source, destination });
+      const reviewed = await inspectDelivery(directory, identity);
+      const unresolved = reviewed.unresolved;
+      edge.pending = reviewed.pending;
+      status.pending = edge.pending.size;
       if (unresolved.size) {
         status.phase = 'blocked'; status.stage = 'send_uncertain'; status.uncertain = unresolved.size;
-        status.warning = '有發送結果不明的訊息，已暫停此路線；重啟不會自動重送。請核對目的訊息後建立新規則。';
+        status.warning = '有發送結果不明的訊息，已暫停此路線；請停止轉送，到人工處理逐筆核對。重啟不會自動重送。';
         continue;
       }
       if (!preparations.has(destinationKey)) preparations.set(destinationKey, withDeadline(to.prepare(destination.id), operationTimeoutMs));
@@ -214,6 +214,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     for (const edge of edges) {
       if (!edge.pending) continue;
       edge.status.pending = edge.pending.size;
+      edge.status.retryAt = cooldowns.get(edge.destination.platform) > now() ? cooldowns.get(edge.destination.platform) : 0;
       if (edge.status.phase === 'running') edge.status.warning = cooldowns.get(edge.destination.platform) > now()
         ? 'Telegram 限流中，待送訊息已保存，等待後自動重試' : edge.pending.size >= Math.ceil(queueLimit * 0.8)
         ? `待送佇列接近容量（${edge.pending.size}/${queueLimit}）；未入列的訊息將於後續補讀` : '';

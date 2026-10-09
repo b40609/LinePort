@@ -13,7 +13,7 @@ async function setup(t) {
       getAllContactIds: async () => ['u1'], getContacts: async () => [{ mid: 'u1', displayName: '同名' }] } });
   const settingsStore = { load: async () => config, save: async value => { config = value; }, telegramToken: async () => token, saveTelegram: async value => { token = value; } };
   const relayController = { status: async () => ({ phase }), startRules: async revision => { starts.push(revision); }, stop: async () => { phase = 'stopped'; } };
-  const telegramFactory = () => ({ getMe: async () => ({ username: 'synthetic_bot' }), getChat: async id => ({ id: Number(id), title: '測試 TG', type: 'supergroup' }),
+  const telegramFactory = () => ({ getMe: async () => ({ id: 123, username: 'synthetic_bot' }), getWebhookInfo: async () => ({ url: '' }), getChatMember: async () => ({ status: 'administrator' }), getChat: async id => ({ id: Number(id), title: '測試 TG', type: 'supergroup' }),
     getUpdates: async () => [{ update_id: 1, message: { chat: { id: -1, title: '測試 TG' }, text: 'SYNTHETIC_PRIVATE_MESSAGE' } }] });
   const server = createProbeServer({ service, settingsStore, relayController, telegramFactory, token: 'synthetic-local-token' });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
@@ -91,4 +91,19 @@ test('LINE endpoints require login, and invalid rule graphs cannot be persisted'
   const invalid = config(); invalid.rules[0].destinations = invalid.rules[0].sources;
   assert.equal((await call('rules', invalid)).status, 400);
   assert.equal(starts.length, 0);
+});
+
+test('preview and exports work without login and do not start a relay; permission check is read-only', async t => {
+  const { call, starts, setPhase } = await setup(t);
+  await saveRules(call, config('telegram'));
+  assert.equal((await call('rules/preview', { config: config('telegram'), source: 'telegram:-1', text: 'synthetic' })).body.results[0].text, 'synthetic');
+  assert.equal((await call('settings/backup')).body.format, 'lineport-settings');
+  assert.equal((await call('diagnostics')).body.format, 'lineport-diagnostics');
+  assert.equal((await call('platform/check', {})).status, 200);
+  assert.deepEqual(starts, []);
+  const backup = (await call('settings/backup')).body;
+  assert.equal((await call('settings/validate', { backup })).status, 200);
+  setPhase('running');
+  assert.equal((await call('settings/restore', { backup })).status, 409);
+  assert.equal((await call('platform/check', {})).status, 409);
 });
