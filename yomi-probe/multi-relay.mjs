@@ -11,6 +11,15 @@ import { createTelegramClient, createTelegramInbox } from './telegram.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+class OperationTimeout extends RelayError {}
+async function withDeadline(operation, timeoutMs) {
+  let timer;
+  try {
+    return await Promise.race([operation, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new OperationTimeout('平台請求逾時')), timeoutMs);
+    })]);
+  } finally { clearTimeout(timer); }
+}
 async function rowsFrom(file) {
   try {
     const text = await readFile(file, 'utf8');
@@ -18,7 +27,7 @@ async function rowsFrom(file) {
     return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
   } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
-export async function createMultiRelay({ config, adapters, platformErrors = {}, directory, now = Date.now, pause = sleep }) {
+export async function createMultiRelay({ config, adapters, platformErrors = {}, directory, now = Date.now, pause = sleep, operationTimeoutMs = 30000 }) {
   const outputFile = path.join(directory, 'lineport-output.jsonl');
   const outputs = new Set();
   for (const row of await rowsFrom(outputFile)) {
@@ -57,10 +66,10 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         status.warning = '有發送結果不明的訊息，已暫停此路線；重啟不會自動重送。請核對目的訊息後建立新規則。';
         continue;
       }
-      if (!preparations.has(destinationKey)) preparations.set(destinationKey, to.prepare(destination.id));
+      if (!preparations.has(destinationKey)) preparations.set(destinationKey, withDeadline(to.prepare(destination.id), operationTimeoutMs));
       await preparations.get(destinationKey);
       if (!saved.startedAt) {
-        if (!baselines.has(sourceKey)) baselines.set(sourceKey, from.recent(source.id));
+        if (!baselines.has(sourceKey)) baselines.set(sourceKey, withDeadline(from.recent(source.id), operationTimeoutMs));
         const baseline = await baselines.get(sourceKey);
         await establishBaseline({ messages: baseline, startedAt: edge.startedAt, record: edge.record, seen: edge.seen });
       }
@@ -90,7 +99,10 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         const oldest = Math.min(...live.map(edge => edge.startedAt));
         // Only stop paging at a checkpoint shared by EVERY active destination.
         const known = new Set([...live[0].seen].filter(id => live.every(edge => edge.seen.has(id))));
-        const messages = await adapters[source.endpoint.platform].read(source.endpoint.id, oldest, known);
+        // Keep an outstanding read after timeout: retry must not spawn overlapping requests.
+        source.pendingRead ||= Promise.resolve().then(() => adapters[source.endpoint.platform].read(source.endpoint.id, oldest, known));
+        const messages = await withDeadline(source.pendingRead, operationTimeoutMs);
+        source.pendingRead = null;
         const health = adapters[source.endpoint.platform].health?.();
         if (health) { source.polls = health.polls; source.lastPoll = health.lastPoll; }
         else { source.polls++; source.lastPoll = new Date(now()).toISOString(); }
@@ -109,6 +121,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         if (!source.warning && live.some(edge => edge.status.lastRead.invalidTime > 0)) source.warning = '來源有訊息缺少有效時間，已略過；請回報此狀態供排查';
         if (!source.warning && live.some(edge => edge.status.lastRead.history > 0)) source.warning = '來源有未處理訊息早於啟動基準，已略過；請核對電腦日期與時間';
       } catch (error) {
+        if (!(error instanceof OperationTimeout)) source.pendingRead = null;
         source.failures++; source.consecutiveErrors = (source.consecutiveErrors || 0) + 1;
         source.retryAt = now() + Math.min(60000, 3000 * 2 ** Math.min(source.consecutiveErrors - 1, 5));
         source.warning = error instanceof RelayError ? error.message : '讀取失敗或超過補讀上限；暫停發送並退避重試，請檢查登入與歷史訊息';
@@ -138,7 +151,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             let result;
             try {
               attempted = true;
-              result = await adapters[edge.destination.platform].send(edge.destination.id, text);
+              result = await withDeadline(adapters[edge.destination.platform].send(edge.destination.id, text), operationTimeoutMs);
               if (!result?.id) throw new Error('Missing acknowledgement');
             } catch (error) {
               status.uncertain++; status.stage = 'send_uncertain'; status.phase = 'blocked';

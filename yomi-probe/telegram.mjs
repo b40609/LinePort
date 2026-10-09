@@ -47,15 +47,18 @@ export function telegramMessage(update) {
 export async function createTelegramInbox(file, client, sourceIds) {
   const sources = new Set(sourceIds), messages = new Map();
   let offset = 0, halted = false;
-  function apply(row) {
+  function validate(row) {
     if (!Number.isSafeInteger(row.offset) || row.offset < 0) throw new Error('Invalid Telegram inbox');
-    // Offsets need not remain monotonic after a week without updates (Telegram randomizes IDs).
-    offset = row.offset;
     if (row.message) {
       const message = row.message;
-      if (typeof message.id !== 'string' || typeof message.chatId !== 'string' || typeof message.text !== 'string' || !Number.isFinite(message.createdTime)) throw new Error('Invalid Telegram message');
-      messages.set(message.id, message);
+      if (typeof message.id !== 'string' || typeof message.chatId !== 'string' || typeof message.text !== 'string' || !Number.isSafeInteger(message.createdTime) || message.createdTime <= 0) throw new Error('Invalid Telegram message');
     }
+  }
+  function apply(row) {
+    validate(row);
+    // Offsets need not remain monotonic after a week without updates (Telegram randomizes IDs).
+    offset = row.offset;
+    if (row.message) messages.set(row.message.id, row.message);
   }
   try {
     const text = await readFile(file, 'utf8');
@@ -75,6 +78,8 @@ export async function createTelegramInbox(file, client, sourceIds) {
         const selected = message && sources.has(message.chatId) && !message.protected && !message.bot && message.text.trim() ? message : null;
         if (selected && !messages.has(selected.id) && messages.size >= 50000) throw new RelayError('Telegram 本機收件紀錄已達 50,000 則，請先停止並整理備份');
         const row = { offset: update.update_id + 1, ...(selected ? { message: selected } : {}) };
+        // Validate before touching either the durable journal or the in-memory offset.
+        validate(row);
         // Confirm updates only on the next poll, after the message is durably stored.
         try { await appendRecord(file, row); }
         catch { halted = true; throw new RelayError('Telegram 本機收件紀錄寫入失敗，已暫停確認更新'); }

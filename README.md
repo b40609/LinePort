@@ -1,6 +1,8 @@
 # LinePort
 
-在 Windows 背景轉送 LINE 與 Telegram 的新文字訊息。v0.3.0 支援多個來源、多個目的，以及群組／個人聊天室。
+在 Windows 背景轉送 LINE 與 Telegram 的新文字訊息。v0.3.1 支援多個來源、多個目的，以及群組／個人聊天室。
+
+v0.3.1 修正平台請求卡住拖累其他路線、Telegram 異常更新損壞收件紀錄的問題。[檢查結果與優化建議](docs/REVIEW-2026-10-09.md)
 
 [下載最新版 ZIP](https://github.com/b40609/LinePort/archive/refs/heads/master.zip) · [使用教學](docs/USAGE.md) · [運作原理](docs/ARCHITECTURE.md) · [安全說明](SECURITY.md)
 

@@ -55,3 +55,24 @@ test('an inbox write failure never acknowledges an update on the next poll', asy
   await assert.rejects(inbox.poll());
   assert.deepEqual(offsets, [0]);
 });
+
+test('malformed Telegram timestamps never poison the journal or advance acknowledgements', async () => {
+  const file = path.join(await mkdtemp(path.join(os.tmpdir(), 'lineport-invalid-update-')), 'inbox.jsonl');
+  const offsets = [];
+  let malformed = true;
+  const client = { getUpdates: async offset => { offsets.push(offset); return [update(10, { date: malformed ? 'invalid' : 1000 })]; } };
+  const inbox = await createTelegramInbox(file, client, ['-123']);
+  await assert.rejects(inbox.poll());
+  malformed = false;
+  const restarted = await createTelegramInbox(file, client, ['-123']);
+  await restarted.poll();
+  assert.deepEqual(offsets, [0, 0]);
+  assert.equal(restarted.messages('-123').length, 1);
+});
+
+test('an overflowing update ID is rejected before it can corrupt the saved offset', async () => {
+  const file = path.join(await mkdtemp(path.join(os.tmpdir(), 'lineport-invalid-offset-')), 'inbox.jsonl');
+  const inbox = await createTelegramInbox(file, { getUpdates: async () => [{ update_id: Number.MAX_SAFE_INTEGER }] }, []);
+  await assert.rejects(inbox.poll());
+  await createTelegramInbox(file, { getUpdates: async () => [] }, []);
+});

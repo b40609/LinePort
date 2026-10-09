@@ -218,3 +218,65 @@ test('saving a Telegram token overrides a fallback environment token without exp
     else process.env.LINEPORT_TELEGRAM_TOKEN = previous;
   }
 });
+
+test('a stalled source has a deadline, does not overlap reads, and leaves healthy routes delivering', async t => {
+  let time = 1000, stalledReads = 0;
+  let release;
+  const stalled = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const line = adapter();
+  line.read = async id => {
+    if (id === 'cslow') {
+      stalledReads++;
+      await stalled;
+      return [message('slow')];
+    }
+    return [message('healthy-'+time, 'healthy', time+1)];
+  };
+  const relay = await createMultiRelay({ config: config(rule('r', [endpoint('cslow'), endpoint('cgood')], [endpoint('cd')])), adapters: { line }, directory: await fixture(), now: () => time, pause: async () => {}, operationTimeoutMs: 5 });
+  await relay.tick();
+  assert.equal(relay.state.phase, 'degraded');
+  assert.deepEqual(line.calls, [['cd', 'healthy']]);
+  time = 5000;
+  await relay.tick();
+  assert.equal(stalledReads, 1);
+  assert.equal(line.calls.length, 2);
+  release();
+  time = 12000;
+  await relay.tick();
+  assert.equal(stalledReads, 1);
+  assert.equal(relay.state.phase, 'running');
+  assert.equal(line.calls.length, 4);
+});
+
+test('a send exceeding its deadline is durably uncertain even if a late acknowledgement arrives', async t => {
+  const directory = await fixture(), value = config(rule());
+  let sends = 0;
+  let release;
+  const stalled = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const line = adapter({ messages: [message('input')], send: async () => {
+    sends++;
+    await stalled;
+    return { id: 'late' };
+  } });
+  const relay = await createMultiRelay({ config: value, adapters: { line }, directory, now: () => 1000, operationTimeoutMs: 5 });
+  await relay.tick();
+  assert.equal(relay.state.routes[0].phase, 'blocked');
+  assert.equal(relay.state.forwarded, 0);
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  const restarted = await createMultiRelay({ config: value, adapters: { line }, directory, now: () => 2000 });
+  await restarted.tick();
+  assert.equal(sends, 1);
+  assert.equal(restarted.state.routes[0].phase, 'blocked');
+});
+
+test('a stalled destination preparation cannot prevent an independent route from starting', async () => {
+  const line = adapter({ messages: [message('input')] });
+  line.prepare = id => id === 'cslow' ? new Promise(() => {}) : Promise.resolve();
+  const relay = await createMultiRelay({ config: config(rule('r', [endpoint('cs')], [endpoint('cslow'), endpoint('cgood')])), adapters: { line }, directory: await fixture(), now: () => 1000, operationTimeoutMs: 5 });
+  await relay.tick();
+  assert.equal(relay.state.routes[0].phase, 'failed');
+  assert.deepEqual(line.calls, [['cgood', 'hello']]);
+});
