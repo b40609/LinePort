@@ -9,10 +9,10 @@ service.resumeSession = async () => true;
 service.profile = { mid: 'usynthetic' };
 service.client = {
   getAllChatMids: async () => ({ memberChats: ['csource', 'cdestination'] }),
-  getChats: async () => [{ chatMid: 'csource', chatName: 'LINE 分析師示範群組' }, { chatMid: 'cdestination', chatName: '示範目的群組' }],
-  getAllContactIds: async () => ['ufriend'], getContacts: async () => [{ mid: 'ufriend', displayName: '示範朋友' }, { mid: 'uanalyst', displayName: '示範分析師' }, { mid: 'ubystander', displayName: '示範路人' }],
+  getChats: async () => [{ chatMid: 'csource', chatName: 'LINE 團隊示範群組' }, { chatMid: 'cdestination', chatName: '示範目的群組' }],
+  getAllContactIds: async () => ['ufriend'], getContacts: async () => [{ mid: 'ufriend', displayName: '示範朋友' }, { mid: 'usender', displayName: '示範成員' }, { mid: 'ubystander', displayName: '示範路人' }],
 };
-service.getRecentMessages = async () => [{ id: 'synthetic-message', from: 'uanalyst', text: '進場 100，停損 95 <script> 不會執行', createdTime: Date.now() }];
+service.getRecentMessages = async () => [{ id: 'synthetic-message', from: 'usender', text: '公告：明天系統更新 <script> 不會執行', createdTime: Date.now() }];
 let config = { version: 1, rules: [] }, token = '', discordToken = '', tgProtected = false, dcProtected = false, relay = { phase: 'stopped' };
 const settingsStore = { load: async () => config, save: async value => { config = normalizeConfig(value); return config; }, restore: async value => { config = normalizeConfig(value); return { config, backup: 'mock-original-settings.json' }; }, telegramToken: async () => token, saveTelegram: async (value, protect) => { token = value; tgProtected ||= protect; }, telegramProtected: async () => tgProtected, discordToken: async () => discordToken, saveDiscord: async (value, protect) => { discordToken = value; dcProtected ||= protect; }, discordProtected: async () => dcProtected };
 const relayController = {
@@ -28,9 +28,9 @@ const relayController = {
 const telegramFactory = () => ({ getMe: async () => ({ id: 12345, username: 'LinePortDemoBot' }),
   getWebhookInfo: async () => ({ url: '' }), getChatMember: async () => ({ status: 'administrator', can_post_messages: true }),
   getChat: async id => ({ id: Number(id), title: 'Telegram 示範群組', type: 'supergroup' }),
-  getUpdates: async () => [{ update_id: 1, message: { message_id: 1, date: Math.floor(Date.now()/1000), from: { id: 123, first_name: '示範分析師' }, text: 'Call 進場 100', chat: { id: -10012345, title: 'Telegram 示範群組', type: 'supergroup' } } }],
+  getUpdates: async () => [{ update_id: 1, message: { message_id: 1, date: Math.floor(Date.now()/1000), from: { id: 123, first_name: '示範成員' }, text: '通知：明天系統更新', chat: { id: -10012345, title: 'Telegram 示範群組', type: 'supergroup' } } }],
 });
-const discordFactory = () => ({ getMe: async () => ({ id: '123456789012345678', username: 'LinePortDemoBot', bot: true }), getChannel: async id => ({ id, type: 0, guild_id: '234567890123456789', name: 'call-demo' }) });
+const discordFactory = () => ({ getMe: async () => ({ id: '123456789012345678', username: 'LinePortDemoBot', bot: true }), getChannel: async id => ({ id, type: 0, guild_id: '234567890123456789', name: 'notifications-demo' }) });
 const reviewStore = { list: async () => ({ items: [] }), resolve: async () => { throw new Error('No mock review items'); } };
 const server = createProbeServer({ service, runPwlessLogin: async () => {}, relayController, settingsStore, reviewStore, telegramFactory, discordFactory, port: 18767 });
 server.listen(18767, '127.0.0.1', () => process.stdout.write('LinePort mock UI: http://127.0.0.1:18767/\n'));

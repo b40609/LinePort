@@ -20,19 +20,19 @@ const directory = () => mkdtemp(path.join(os.tmpdir(), 'lineport-extensions-'));
 const dcToken = 'SYNTHETIC_DISCORD_TOKEN_1234567890';
 const channel = '123456789012345678';
 const endpoint = (platform, id) => ({ platform, id, name: id });
-const config = (extra = {}) => normalizeConfig({ version: 1, rules: [{ id: 'call', name: 'Call', enabled: true, sources: [endpoint('line', 'csource')], destinations: [endpoint('discord', channel)], ...extra }] });
-const message = (id = 'one') => ({ id, text: '進場 100 停損 95', from: 'uanalyst', createdTime: 1100 });
+const config = (extra = {}) => normalizeConfig({ version: 1, rules: [{ id: 'call', name: '通知', enabled: true, sources: [endpoint('line', 'csource')], destinations: [endpoint('discord', channel)], ...extra }] });
+const message = (id = 'one') => ({ id, text: '公告 100 更新 95', from: 'usender', createdTime: 1100 });
 const response = (body, status = 200) => ({ ok: status === 200, status, json: async () => body });
 const fakeProtection = { protect: async token => ({ synthetic: token }), unprotect: async record => { if (!record.synthetic) throw new Error('SYNTHETIC_INVALID'); return record.synthetic; } };
 
 test('Discord text suppresses mentions and embeds and accepts only a matching acknowledgement', async () => {
   let options;
   const client = createDiscordClient(dcToken, { request: async (_, value) => { options = value; return response({ id: '234567890123456789', channel_id: channel }); } });
-  assert.deepEqual(await client.send(channel, '@everyone Call'), { id: '234567890123456789' });
+  assert.deepEqual(await client.send(channel, '@everyone 通知'), { id: '234567890123456789' });
   const body = JSON.parse(options.body);
   assert.deepEqual(body.allowed_mentions, { parse: [], users: [], roles: [], replied_user: false });
   assert.equal(body.flags, 4); assert.equal(options.redirect, 'error');
-  assert.equal((await createDiscordClient(dcToken, { request: async () => response({ id: '234567890123456789', channel_id: '345678901234567890' }) }).send(channel, 'Call')).id, '');
+  assert.equal((await createDiscordClient(dcToken, { request: async () => response({ id: '234567890123456789', channel_id: '345678901234567890' }) }).send(channel, '通知')).id, '');
   await assert.rejects(client.send(channel, 'a'.repeat(2001)));
 });
 
@@ -46,11 +46,11 @@ test('Discord validates Bot identity, unsigned snowflakes and ordinary guild tex
 
 test('Discord retries only explicit, bounded 429 responses and redacts upstream errors', async () => {
   const limited = createDiscordClient(dcToken, { request: async () => response({ retry_after: .125, global: false }, 429) });
-  await assert.rejects(limited.send(channel, 'Call'), error => error instanceof DiscordRateLimit && error.retryAfterMs === 125);
+  await assert.rejects(limited.send(channel, '通知'), error => error instanceof DiscordRateLimit && error.retryAfterMs === 125);
   for (const body of [{ retry_after: -1, global: true }, { retry_after: 1 }, { retry_after: 2147484, global: false }]) {
-    await assert.rejects(createDiscordClient(dcToken, { request: async () => response(body, 429) }).send(channel, 'Call'), error => !(error instanceof DiscordRateLimit));
+    await assert.rejects(createDiscordClient(dcToken, { request: async () => response(body, 429) }).send(channel, '通知'), error => !(error instanceof DiscordRateLimit));
   }
-  await assert.rejects(createDiscordClient(dcToken, { request: async () => { throw new Error(dcToken); } }).send(channel, 'Call'), error => !error.message.includes(dcToken));
+  await assert.rejects(createDiscordClient(dcToken, { request: async () => { throw new Error(dcToken); } }).send(channel, '通知'), error => !error.message.includes(dcToken));
 });
 
 test('Discord retry deadlines survive restart while other platforms continue', async () => {
@@ -147,7 +147,7 @@ async function apiSetup(t) {
   const folder = await directory(), settingsStore = createSettingsStore(folder, fakeProtection);
   let phase = 'stopped';
   const service = Object.assign(new EventEmitter(), { resumeSession: async () => true, profile: { mid: 'usynthetic' }, client: {
-    getAllChatMids: async () => ({ memberChats: ['csource'] }), getChats: async () => [{ chatMid: 'csource', chatName: '示範來源' }], getAllContactIds: async () => [], getContacts: async () => [{ mid: 'uanalyst', displayName: '示範分析師' }],
+    getAllChatMids: async () => ({ memberChats: ['csource'] }), getChats: async () => [{ chatMid: 'csource', chatName: '示範來源' }], getAllContactIds: async () => [], getContacts: async () => [{ mid: 'usender', displayName: '示範指定發訊者' }],
   }, getRecentMessages: async () => [{ ...message(), text: 'SYNTHETIC_PRIVATE_MESSAGE' }] });
   const server = createProbeServer({ service, token: 'synthetic-api-auth', runPwlessLogin: async () => {}, settingsStore, dataDirectory: folder,
     relayController: { status: async () => ({ phase }) }, discordFactory: () => ({ getMe: async () => ({ id: channel, username: 'SyntheticBot', bot: true }), getChannel: async id => ({ id, name: 'synthetic-channel' }) }) });
@@ -167,7 +167,7 @@ test('author discovery returns identities without text, requires auth and stoppe
   assert.equal((await api.call('/api/source/senders', { platform: 'line', id: 'csource' }, false)).status, 403);
   await api.call('/api/resume', {});
   const result = await api.call('/api/source/senders', { platform: 'line', id: 'csource' });
-  assert.equal(result.status, 200); assert.ok(result.text.includes('uanalyst')); assert.ok(!result.text.includes('SYNTHETIC_PRIVATE_MESSAGE'));
+  assert.equal(result.status, 200); assert.ok(result.text.includes('usender')); assert.ok(!result.text.includes('SYNTHETIC_PRIVATE_MESSAGE'));
   api.setPhase('running'); assert.equal((await api.call('/api/source/senders', { platform: 'line', id: 'csource' })).status, 409);
 });
 

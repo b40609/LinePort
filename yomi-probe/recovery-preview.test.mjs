@@ -16,8 +16,8 @@ import { sourceReply, destinationReply } from './reply-links.mjs';
 
 const directory = () => mkdtemp(path.join(os.tmpdir(), 'lineport-recovery-'));
 const endpoint = (id, platform = 'telegram') => ({ platform, id, name: id });
-const config = (extra = {}) => normalizeConfig({ version: 1, rules: [{ id: 'call', name: 'Call', enabled: true, sources: [endpoint('-1')], destinations: [endpoint('-2')], ...extra }] });
-const message = (id, extra = {}) => ({ id: `-1:${id}`, text: 'Call 進場 100，停損 95', createdTime: 1000 + id, from: '123', ...extra });
+const config = (extra = {}) => normalizeConfig({ version: 1, rules: [{ id: 'call', name: '通知', enabled: true, sources: [endpoint('-1')], destinations: [endpoint('-2')], ...extra }] });
+const message = (id, extra = {}) => ({ id: `-1:${id}`, text: '通知 公告 100，更新 95', createdTime: 1000 + id, from: '123', ...extra });
 const response = body => ({ ok: true, status: 200, json: async () => body });
 function adapter(messages = []) {
   const calls = [];
@@ -27,7 +27,7 @@ function adapter(messages = []) {
 const options = async (value, telegram, extra = {}) => ({ config: value, adapters: { telegram }, directory: await directory(), now: () => 1000, pause: async () => {}, ...extra });
 
 test('media preview matches queued payload filters and includes prefix without accessing real media', async () => {
-  const value = config({ media: true, senderAllowlist: { 'telegram:-1': ['123'] }, include: ['Call'], prefix: '[A] ' });
+  const value = config({ media: true, senderAllowlist: { 'telegram:-1': ['123'] }, include: ['通知'], prefix: '[A] ' });
   for (const kind of ['photo', 'document']) {
     const media = { kind, fileSize: 1000000, fileId: 'SYNTHETIC_FILE' };
     const input = { config: value, source: 'telegram:-1', text: message(1).text, sender: '123', timestamp: 1001, media };
@@ -53,13 +53,13 @@ test('media preview distinguishes no-caption attachment, disabled media and size
   assert.equal(previewRules({ ...input, text: 'x'.repeat(1025) }).results[0].destinations[0].eligible, false);
   const rejected = previewRules({ ...input, reply: true, media: { kind: 'photo', fileSize: 10000001 } }).results[0];
   assert.match(rejected.destinations[0].reason, /實際運作時會暫停/); assert.equal(rejected.replyReason, '');
-  const disabled = previewRules({ ...input, config: config(), text: 'Call' }).results[0];
+  const disabled = previewRules({ ...input, config: config(), text: '通知' }).results[0];
   assert.equal(disabled.contentKind, 'text'); assert.match(disabled.summary, /不含附件/);
   assert.equal(previewRules({ ...input, config: config() }).results[0].destinations[0].eligible, false);
 });
 
 test('preview rejects unselected sources and invalid time even when no rule matches', () => {
-  const input = { config: config(), source: 'telegram:-1', text: 'Call' };
+  const input = { config: config(), source: 'telegram:-1', text: '通知' };
   for (const extra of [{ source: 'telegram:-9' }, { timestamp: 8640000000000001 }, { media: { kind: 'video', fileSize: 1 } }, { protected: 'true' }, { reply: 'true' }]) assert.throws(() => previewRules({ ...input, ...extra }));
 });
 
@@ -67,7 +67,7 @@ test('each preview source uses its own author allowlist and hold/skip are visibl
   const timestamp = Date.parse('2026-10-12T08:00:00+08:00');
   const schedule = { timezone: 'Asia/Taipei', days: [1], start: 540, end: 900, outside: 'hold' };
   const value = config({ media: true, sources: [endpoint('-1'), endpoint('-3')], senderAllowlist: { 'telegram:-1': ['123'], 'telegram:-3': ['456'] }, schedule });
-  const input = { config: value, source: 'telegram:-1', sender: '123', text: 'Call', timestamp, media: { kind: 'photo', fileSize: 1 } };
+  const input = { config: value, source: 'telegram:-1', sender: '123', text: '通知', timestamp, media: { kind: 'photo', fileSize: 1 } };
   assert.match(previewRules(input).results[0].destinations[0].reason, /保留待送/);
   assert.equal(previewRules({ ...input, source: 'telegram:-3' }).results[0].destinations[0].eligible, false);
   assert.match(previewRules({ ...input, config: config({ media: true, schedule: { ...schedule, outside: 'skip' } }) }).results[0].destinations[0].reason, /略過/);
@@ -97,8 +97,8 @@ test('cross-platform replies use destination IDs and preserve the same route aft
   for (const sourcePlatform of ['line', 'telegram']) {
     const destinationPlatform = sourcePlatform === 'line' ? 'telegram' : 'line';
     const sourceId = sourcePlatform === 'line' ? 'csource' : '-1', destId = destinationPlatform === 'line' ? 'cdest' : '-2';
-    const parent = sourcePlatform === 'line' ? { id: '1', text: 'Call', createdTime: 1001 } : message(1);
-    const child = sourcePlatform === 'line' ? { id: '2', text: 'Call', createdTime: 1002, relatedMessageId: '1', messageRelationType: 3 } : message(2, { replyTo: '-1:1' });
+    const parent = sourcePlatform === 'line' ? { id: '1', text: '通知', createdTime: 1001 } : message(1);
+    const child = sourcePlatform === 'line' ? { id: '2', text: '通知', createdTime: 1002, relatedMessageId: '1', messageRelationType: 3 } : message(2, { replyTo: '-1:1' });
     const from = adapter([parent]), to = adapter(), destinationId = destinationPlatform === 'line' ? '101' : '-2:101';
     to.send = async (id, value, options) => { to.calls.push({ id, value, options }); return { id: destinationId }; };
     const value = config({ sources: [endpoint(sourceId, sourcePlatform)], destinations: [endpoint(destId, destinationPlatform)], replies: true });
@@ -126,7 +126,7 @@ test('replies are opt-in and settings backup retains the option without changing
   const relay = await createMultiRelay(await options(value, client)); await relay.tick();
   assert.deepEqual(client.calls[1].options, {});
   assert.equal(validateBackup(settingsBackup(config({ replies: true }))).rules[0].replies, true);
-  assert.match(previewRules({ config: value, source: 'telegram:-1', text: 'Call', reply: true }).results[0].replyReason, /關閉/);
+  assert.match(previewRules({ config: value, source: 'telegram:-1', text: '通知', reply: true }).results[0].replyReason, /關閉/);
 });
 
 test('filtered parent is never backfilled and a reply is sent once as an ordinary message', async () => {
@@ -140,7 +140,7 @@ test('filtered parent is never backfilled and a reply is sent once as an ordinar
 test('persisted queued media reply retains its parent when restart occurs before delivery', async () => {
   const client = adapter([message(1)]), setup = await options(config({ replies: true, media: true }), client);
   const first = await createMultiRelay(setup); await first.tick();
-  client.read = async () => [message(2, { replyTo: '-1:1', text: 'Call', media: { kind: 'photo', fileId: 'SYNTHETIC_FILE', fileSize: 1 } })];
+  client.read = async () => [message(2, { replyTo: '-1:1', text: '通知', media: { kind: 'photo', fileId: 'SYNTHETIC_FILE', fileSize: 1 } })];
   await first.tick({ deliver: false }); assert.equal(first.state.routes[0].pending, 1);
   const restarted = await createMultiRelay(setup); await restarted.tick({ sourceKeys: [] });
   assert.equal(client.calls.length, 2); assert.equal(client.calls[1].value.kind, 'photo'); assert.deepEqual(client.calls[1].options, { replyTo: '-2:101' });
@@ -170,13 +170,13 @@ test('manual confirmation of an unknown parent does not invent a destination rep
 });
 
 test('malformed or unsupported reply journals fail closed without dropping pending evidence', () => {
-  const rows = [{ startedAt: 1000, baseline: [] }, { id: '-1:1', outcome: 'queued', text: 'Call' }];
+  const rows = [{ startedAt: 1000, baseline: [] }, { id: '-1:1', outcome: 'queued', text: '通知' }];
   const parse = extra => parseJournal([...rows, extra].map(JSON.stringify).join('\n') + '\n');
-  for (const extra of [{ id: '-1:2', outcome: 'queued', text: 'Call', replyTo: '-1:1', replyVersion: 2 }, { id: '-1:1', outcome: 'sent', destinationId: '../../secret' }, { id: '-1:2', outcome: 'sent', destinationId: '-2:1' }]) assert.throws(() => parse(extra));
+  for (const extra of [{ id: '-1:2', outcome: 'queued', text: '通知', replyTo: '-1:1', replyVersion: 2 }, { id: '-1:1', outcome: 'sent', destinationId: '../../secret' }, { id: '-1:2', outcome: 'sent', destinationId: '-2:1' }]) assert.throws(() => parse(extra));
 });
 
 test('Telegram reply extraction excludes quoted text and wrong-chat relations; inbox recovery retains IDs', async () => {
-  const update = { update_id: 1, message: { chat: { id: -1 }, message_id: 2, date: 2, text: 'Call', from: { id: 123 }, reply_to_message: { chat: { id: -1 }, message_id: 1, text: 'SYNTHETIC_PARENT_PRIVATE_BODY' } } };
+  const update = { update_id: 1, message: { chat: { id: -1 }, message_id: 2, date: 2, text: '通知', from: { id: 123 }, reply_to_message: { chat: { id: -1 }, message_id: 1, text: 'SYNTHETIC_PARENT_PRIVATE_BODY' } } };
   const parsed = telegramMessage(update); assert.equal(parsed.replyTo, '-1:1'); assert.ok(!JSON.stringify(parsed).includes('PRIVATE_BODY'));
   assert.equal(telegramMessage({ ...update, message: { ...update.message, reply_to_message: { chat: { id: -9 }, message_id: 1 } } }).replyTo, undefined);
   const file = path.join(await directory(), 'lineport-telegram-inbox-12345.jsonl'), client = { getUpdates: async () => [update] };
@@ -186,20 +186,20 @@ test('Telegram reply extraction excludes quoted text and wrong-chat relations; i
 
 test('Telegram sends native text and media replies in one request and rejects wrong-chat mappings', async () => {
   const calls = [], client = createTelegramClient('12345:SYNTHETIC_TOKEN_1234567890', { request: async (url, options) => { calls.push({ url, body: JSON.parse(options.body) }); return response({ ok: true, result: { message_id: 101, chat: { id: -2 } } }); } });
-  await client.send('-2', 'Call', { replyTo: '-2:100' });
+  await client.send('-2', '通知', { replyTo: '-2:100' });
   await client.send('-2', { kind: 'photo', fileId: 'SYNTHETIC_FILE', fileSize: 1, caption: '' }, { replyTo: '-2:100' });
   for (const call of calls) assert.deepEqual(call.body.reply_parameters, { message_id: 100, allow_sending_without_reply: true });
-  await assert.rejects(client.send('-2', 'Call', { replyTo: '-9:100' })); assert.equal(calls.length, 2);
+  await assert.rejects(client.send('-2', '通知', { replyTo: '-9:100' })); assert.equal(calls.length, 2);
 });
 
 test('Discord replies suppress mentions and LINE reply uses the encrypted public service boundary', async () => {
   let body, args;
   const client = createDiscordClient('SYNTHETIC_DISCORD_TOKEN_1234567890', { request: async (_, options) => { body = JSON.parse(options.body); return response({ id: '234567890123456789', channel_id: '123456789012345678' }); } });
-  await client.send('123456789012345678', 'Call', { replyTo: '345678901234567890' });
+  await client.send('123456789012345678', '通知', { replyTo: '345678901234567890' });
   assert.deepEqual(body.message_reference, { message_id: '345678901234567890', channel_id: '123456789012345678', fail_if_not_exists: false });
   assert.equal(body.allowed_mentions.replied_user, false);
-  await sendRelayText({ sendMessage: async (...value) => { args = value; } }, 'cdest', 'Call', { replyTo: '100' });
-  assert.deepEqual(args, ['cdest', 'Call', undefined, { relatedMessageId: '100', messageRelationType: 3, relatedMessageServiceCode: 1 }]);
+  await sendRelayText({ sendMessage: async (...value) => { args = value; } }, 'cdest', '通知', { replyTo: '100' });
+  assert.deepEqual(args, ['cdest', '通知', undefined, { relatedMessageId: '100', messageRelationType: 3, relatedMessageServiceCode: 1 }]);
 });
 
 test('private archive is checked against original bytes and can be independently reverified', async () => {

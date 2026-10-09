@@ -1,6 +1,6 @@
 # v0.7.0 更新與手動安裝
 
-2026-10-09。接續 v0.6.0，完成多來源媒體模擬、選用回覆關聯及私人封存完整性核對；沒有新增依賴。各來源分析師白名單可排除 LINE 群內其他人，再以必要內容條件排除分析師純寒暄。
+2026-10-09。接續 v0.6.0，完成多來源媒體模擬、選用回覆關聯及私人封存完整性核對；沒有新增依賴。各來源指定發訊者白名單可排除 LINE 群內其他人，再以必要內容條件排除指定發訊者純寒暄。
 
 ## 本版變更
 
@@ -31,6 +31,6 @@ Get-FileHash .\LinePort-v0.7.0.zip -Algorithm SHA256
 
 133 項測試通過、0 失敗、0 跳過；19 項新測試涵蓋模擬與實際內容一致、回覆持久對照、跨平台／多目的、原訊息缺失、429、不明結果與封存竄改拒絕。npm 已知依賴漏洞 0。[驗證紀錄](../yomi-probe/VERIFICATION.md)
 
-390px 手機寬度與桌面無水平溢出，Mock 瀏覽器無警告／錯誤。畫面全部為合成資料：[手機畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.0/docs/assets/preview-mobile-0.7.jpg) · [完整桌面畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.0/docs/assets/preview-0.7.jpg)。
+390px 手機寬度與桌面無水平溢出，Mock 瀏覽器無警告／錯誤。畫面全部為合成資料：[手機畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-mobile-0.7.jpg) · [完整桌面畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-0.7.jpg)。
 
 LINE 為非官方協定；真實平台權限、回覆及媒體收送沒有在本次用真人帳號驗證。LINE 媒體／社群、相簿整組／影音、編輯／刪除同步、Slack、Discord 來源未支援。Bot Token DPAPI 選用，LINE 登入／E2EE、訊息與原明文憑證副本未完整加密。封存不釋放容量，安全壓縮尚未實作；沒有無限期運作、無漏洞或完整送達保證。

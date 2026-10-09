@@ -68,8 +68,8 @@ export function textRejection(rule, message, sourceKey, allowEmpty = false) {
   if (message.e2eeDecryptFailure) return '無法解密原訊息，請先確認來源可正常讀取';
   if (typeof message.text !== 'string' || !allowEmpty && !message.text.trim()) return '沒有可轉送的文字';
   const text = message.text.toLocaleLowerCase();
-  if (rule.include.length && !rule.include.some(word => text.includes(word.toLocaleLowerCase()))) return '沒有包含任一必要關鍵字；請核對 Call 訊格式';
-  if (rule.exclude.some(word => text.includes(word.toLocaleLowerCase()))) return '包含排除關鍵字；請核對是否誤排除有效 Call 訊';
+  if (rule.include.length && !rule.include.some(word => text.includes(word.toLocaleLowerCase()))) return '沒有包含任一必要關鍵字；請核對訊息格式';
+  if (rule.exclude.some(word => text.includes(word.toLocaleLowerCase()))) return '包含排除關鍵字；請核對是否誤排除有效訊息';
   return null;
 }
 export function matchingText(rule, message, sourceKey) {

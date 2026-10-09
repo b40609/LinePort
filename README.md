@@ -1,14 +1,12 @@
 # LinePort
 
-在 Windows 背景轉送 LINE 與 Telegram 訊息。v0.7.1 支援多來源、多目的、指定發訊者及選用的 Discord 文字目的。
+在 Windows 背景轉送 LINE 與 Telegram 訊息。支援多來源、多目的、指定發訊者、內容篩選及選用的 Discord 文字目的。
 
-v0.7.1 補上分析師 2–3 來源 → 3–4 目的配置、配對數與附件限制提示，以及續抱／加減碼／出場的選用範例。三來源到四目的與重啟去重已用 Mock 驗證，136 項測試通過。[本次更新](docs/RELEASE-0.7.1.md)
+v0.7.2 將介面、文件、範例與示範畫面統一為通用訊息轉送工具。關鍵字範例採公告、通知、提醒，需自行選用；既有規則不會自動改寫。136 項 Mock 測試通過。[本次更新](docs/RELEASE-0.7.2.md)
 
-v0.7.0 補上可選來源的文字／媒體模擬、選用回覆關聯與重啟恢復、私人封存完整性驗證。沿用分析師白名單、規則搜尋／複製、台北時段、Telegram 圖片／檔案、工作隔離與選用 Bot Token DPAPI。新轉送選項預設關閉，保留不明發送不自動重送原則。[本版更新與限制](docs/RELEASE-0.7.0.md) · [開發項目與支援範圍](docs/DEVELOPMENT-STATUS.md) · [分析師 Call 訊設定](docs/CALL-ROUTING.md) · [後續交接](HANDOFF.md)
+[下載 v0.7.2 ZIP](https://github.com/b40609/LinePort/releases/download/v0.7.2/LinePort-v0.7.2.zip) · [更新與 SHA-256](docs/RELEASE-0.7.2.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
 
-[下載 v0.7.1 ZIP](https://github.com/b40609/LinePort/releases/download/v0.7.1/LinePort-v0.7.1.zip) · [更新與 SHA-256](docs/RELEASE-0.7.1.md) · [使用教學](docs/USAGE.md) · [運作原理](docs/ARCHITECTURE.md) · [安全說明](SECURITY.md)
-
-[手機可開啟的示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.0/docs/assets/preview-mobile-0.7.jpg)（名稱、ID、訊息均為假資料）。
+[手機示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-mobile-0.7.jpg)（名稱、ID、訊息均為假資料）。
 
 ## 功能
 
@@ -16,7 +14,7 @@ v0.7.0 補上可選來源的文字／媒體模擬、選用回覆關聯與重啟�
 - **跨平台**：LINE／Telegram 可轉送到 LINE、Telegram 或選用 Discord 一般文字頻道；Discord 只作目的。
 - **群組與個人**：LINE 已加入群組與好友；Telegram Bot 可存取的群組、頻道與私訊。
 - **文字篩選**：包含／排除關鍵字、加上訊息前綴。
-- **指定分析師**：每個來源各選固定發訊者 ID；名稱改變不影響，貼圖不轉送。搭配 Call 訊關鍵字排除純寒暄。
+- **指定發訊者**：每個來源各選固定發訊者 ID；名稱改變不影響，貼圖不轉送。搭配訊息關鍵字排除純寒暄。
 - **選用時段與媒體**：台北時段外明確保留待送或略過；圖片／檔案只支援同一 Bot 的 Telegram → Telegram。
 - **管理與保護**：規則搜尋、複製為暫停規則、各來源文字／媒體模擬、安全診斷、設定備份還原、容量監控及保留原檔的私人封存與 SHA-256 驗證。
 - **選用回覆關聯**：引用同路線已確認送達的原訊息，重啟保留對照；缺少對照時送一般訊息，不補送被篩掉的原訊息。
@@ -30,7 +28,7 @@ v0.7.0 補上可選來源的文字／媒體模擬、選用回覆關聯與重啟�
 | 系統 | Windows 11；實測 Node.js 26.4.0 |
 | LINE | 非官方個人帳號協定；已加入的一般群組、好友私訊 |
 | Telegram | 官方 Bot API；Bot 有權限讀取／發送的聊天室 |
-| 訊息 | 可讀純文字；選用 Telegram → Telegram 圖片／檔案；目的仍以本工具帳號發送 |
+|訊息 | 可讀純文字；選用 Telegram → Telegram 圖片／檔案；目的仍以本工具帳號發送 |
 | 規則上限 | 30 條；每條 1–10 個來源、1–10 個目的；合計最多 100 組啟用配對 |
 | 未支援 | LINE 社群 OpenChat、Slack、Discord 來源、跨 LINE 媒體、貼圖、相簿整組／影音、編輯／刪除同步、完整聊天封存 |
 
@@ -62,7 +60,7 @@ LINE 透過 [Yomi](https://github.com/RikaiDev/yomi) 讀取／解密及加密發
 ```mermaid
 flowchart LR
     L[LINE 群組與好友] --> R[來源共用讀取]
-    T[Telegram Bot 訊息] --> R
+    T[Telegram Bot訊息] --> R
     R --> F[歷史排除、去重、作者、關鍵字]
     F --> Q[各配對保存待送]
     Q --> J[發送前保存 sending]
@@ -81,7 +79,7 @@ flowchart LR
 - LINE 使用非官方個人帳號協定，有功能限制或停權風險；登入可能使官方電腦版 LINE 登出。[LINE 條款](https://terms.line.me/line_terms?lang=zh-Hant)
 - 目的訊息由登入 LINE 帳號或 Telegram Bot 重新發送，不保留原發訊者身分。
 - 休眠、斷線、查詢上限、首次基準與發送結果不明皆可能造成漏訊，沒有完整送達保證。
-- Telegram 受 Bot 權限、隱私模式、其他輪詢程序與 Webhook 影響；受保護內容及 Bot 訊息不轉送。
+- Telegram 受 Bot 權限、隱私模式、其他輪詢程序與 Webhook 影響；受保護內容及 Bot訊息不轉送。
 - Bot Token 可選 Windows DPAPI；舊明文檔為回復保留，LINE 登入／E2EE、訊息與封存仍未加密。勿分享或雲端同步資料目錄。
 - 單一紀錄 16 MiB、盤點紀錄合計 256 MiB 或可用空間低於 64 MiB 時停止收件／發送。封存不刪原檔、不釋放容量；尚無自動壓縮與無限期運作保證。
 
@@ -94,7 +92,7 @@ cd yomi-probe
 npm.cmd test
 ```
 
-測試使用模擬服務，不讀取真實登入資料、不發真實 LINE／Telegram 訊息。介面模擬可執行 `node ui-mock.mjs`，使用 18767 埠。
+測試使用模擬服務，不讀取真實登入資料、不發真實 LINE／Telegram訊息。介面模擬可執行 `node ui-mock.mjs`，使用 18767 埠。
 
 [疑難排解](docs/TROUBLESHOOTING.md) · [架構](docs/ARCHITECTURE.md) · [安全](SECURITY.md)
 

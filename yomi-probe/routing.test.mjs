@@ -9,27 +9,27 @@ import { createMultiRelay } from './multi-relay.mjs';
 import { previewRules } from './user-tools.mjs';
 
 const endpoint = (platform, id) => ({ platform, id, name: id });
-const sources = [endpoint('line', 'canalysts'), endpoint('telegram', '-1001'), endpoint('telegram', '-1002')];
+const sources = [endpoint('line', 'csenders'), endpoint('telegram', '-1001'), endpoint('telegram', '-1002')];
 const destinations = [endpoint('line', 'creaders1'), endpoint('line', 'creaders2'), endpoint('telegram', '-2001'), endpoint('telegram', '-2002')];
-const keywords = ['進場', '買進', '賣出', '停損', '停利', '續抱', '加碼', '減碼', '出場'];
+const keywords = ['公告', '通知', '變更', '更新', '完成', '提醒', '新增', '調整', '結束'];
 const value = () => normalizeConfig({ version: 1, rules: sources.map((source, index) => ({
-  id: 'call' + index, name: 'Call ' + index, enabled: true, sources: [source], destinations,
-  senderAllowlist: { [source.platform + ':' + source.id]: source.platform === 'line' ? ['uanalyst1', 'uanalyst2', 'uanalyst3'] : ['123'] },
+  id: 'call' + index, name: '通知 ' + index, enabled: true, sources: [source], destinations,
+  senderAllowlist: { [source.platform + ':' + source.id]: source.platform === 'line' ? ['usender1', 'usender2', 'usender3'] : ['123'] },
   include: keywords, exclude: [], prefix: '[來源' + index + '] ',
 })) });
 
-test('three analyst sources fan out to four mixed destinations and restart preserves successful pairs', async () => {
+test('three sender sources fan out to four mixed destinations and restart preserves successful pairs', async () => {
   const deliveries = [], reads = [];
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-call-routing-'));
   const adapter = platform => ({
     identity: 'synthetic-' + platform, recent: async () => [], prepare: async () => {},
     read: async id => {
       reads.push(platform + ':' + id);
-      const analyst = platform === 'line' ? 'uanalyst1' : '123';
+      const sender = platform === 'line' ? 'usender1' : '123';
       const row = (suffix, from, text) => ({ id: id + ':' + suffix, from, text, createdTime: 1100 });
-      return [row('call', analyst, '進場 100，停損 95，謝謝'), row('hold', analyst, '續抱'),
-        row('stranger', platform === 'line' ? 'ubystander' : '456', '進場 100，停損 95'), row('greeting', analyst, '你好，謝謝'),
-        row('image', analyst, '')];
+      return [row('call', sender, '公告 100，更新 95，謝謝'), row('hold', sender, '提醒'),
+        row('stranger', platform === 'line' ? 'ubystander' : '456', '公告 100，更新 95'), row('greeting', sender, '你好，謝謝'),
+        row('image', sender, '')];
     },
     send: async (id, text) => { deliveries.push({ platform, id, text }); return { id: String(10000 + deliveries.length) }; },
   });
@@ -44,7 +44,7 @@ test('three analyst sources fan out to four mixed destinations and restart prese
     const received = deliveries.filter(row => row.platform === destination.platform && row.id === destination.id);
     assert.equal(received.length, 6);
     for (let i = 0; i < 3; i++) assert.equal(received.filter(row => row.text.startsWith('[來源' + i + '] ')).length, 2);
-    assert.ok(received.every(row => row.text.includes('進場') || row.text.endsWith('續抱')));
+    assert.ok(received.every(row => row.text.includes('公告') || row.text.endsWith('提醒')));
   }
   const restarted = await createMultiRelay(options);
   await restarted.tick();
@@ -54,7 +54,7 @@ test('three analyst sources fan out to four mixed destinations and restart prese
 
 test('mixed destinations preview explicitly reports caption only and rejects media enablement', () => {
   const config = value();
-  const result = previewRules({ config, source: 'telegram:-1001', sender: '123', text: '進場 100',
+  const result = previewRules({ config, source: 'telegram:-1001', sender: '123', text: '公告 100',
     timestamp: 1100, media: { kind: 'photo', fileSize: 1000000 } }).results[0];
   assert.equal(result.destinations.filter(row => row.eligible).length, 4);
   assert.equal(result.contentKind, 'text');

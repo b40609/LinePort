@@ -15,9 +15,9 @@ import { privateSnapshot, storageHealth, readJournalFile, MAX_JOURNAL_BYTES } fr
 import { recentSenders } from './source-senders.mjs';
 
 const endpoint = (id, platform = 'line') => ({ id, platform, name: id });
-const rule = options => normalizeConfig({ version: 1, rules: [{ id: 'one', name: 'Call', enabled: true, sources: [endpoint('csource')], destinations: [endpoint('cdest')], ...options }] }).rules[0];
+const rule = options => normalizeConfig({ version: 1, rules: [{ id: 'one', name: '通知', enabled: true, sources: [endpoint('csource')], destinations: [endpoint('cdest')], ...options }] }).rules[0];
 const directory = () => mkdtemp(path.join(os.tmpdir(), 'lineport-features-'));
-const message = (id = 'a', text = '進場 100，停損 95', from = 'uanalyst') => ({ id, text, from, createdTime: 1100 });
+const message = (id = 'a', text = '公告 100，更新 95', from = 'usender') => ({ id, text, from, createdTime: 1100 });
 function adapter(messages = []) {
   const calls = [];
   return { identity: 'synthetic', calls, prepare: async () => {}, recent: async () => [], read: async () => messages,
@@ -25,26 +25,26 @@ function adapter(messages = []) {
 }
 const taipei = value => Date.parse(value + '+08:00');
 test('per-source sender IDs reject bystanders and missing identity, preserve unrestricted other sources', () => {
-  const value = rule({ sources: [endpoint('csource'), endpoint('-1', 'telegram')], senderAllowlist: { 'line:csource': ['uanalyst', 'uanalyst'] } });
-  assert.deepEqual(value.senderAllowlist['line:csource'], ['uanalyst']);
+  const value = rule({ sources: [endpoint('csource'), endpoint('-1', 'telegram')], senderAllowlist: { 'line:csource': ['usender', 'usender'] } });
+  assert.deepEqual(value.senderAllowlist['line:csource'], ['usender']);
   assert.equal(matchingText(value, message('a', '你好', 'ubystander'), 'line:csource'), null);
-  assert.equal(matchingText(value, message('a', 'Call', ''), 'line:csource'), null);
+  assert.equal(matchingText(value, message('a', '通知', ''), 'line:csource'), null);
   assert.equal(matchingText(value, message(), 'line:csource'), message().text);
-  assert.equal(matchingText(value, message('b', 'Call', '123'), 'telegram:-1'), 'Call');
-  assert.throws(() => rule({ senderAllowlist: { 'line:cother': ['uanalyst'] } }));
-  assert.throws(() => rule({ senderAllowlist: { 'line:csource': ['同名分析師'] } }));
+  assert.equal(matchingText(value, message('b', '通知', '123'), 'telegram:-1'), '通知');
+  assert.throws(() => rule({ senderAllowlist: { 'line:cother': ['usender'] } }));
+  assert.throws(() => rule({ senderAllowlist: { 'line:csource': ['同名指定發訊者'] } }));
 });
 test('preview and relay use identical sender and content filters, independently for each destination', async () => {
-  const value = rule({ senderAllowlist: { 'line:csource': ['uanalyst'] }, include: ['停損'], prefix: '[Call] ' });
+  const value = rule({ senderAllowlist: { 'line:csource': ['usender'] }, include: ['更新'], prefix: '[通知] ' });
   const config = { version: 1, rules: [value] }, line = adapter([message(), message('b', '謝謝', 'ubystander')]);
   const relay = await createMultiRelay({ config, adapters: { line }, directory: await directory(), now: () => 1000, pause: async () => {} });
   await relay.tick();
-  const preview = previewRules({ config, source: 'line:csource', sender: 'uanalyst', text: message().text, timestamp: 1100 });
+  const preview = previewRules({ config, source: 'line:csource', sender: 'usender', text: message().text, timestamp: 1100 });
   assert.deepEqual(line.calls, [['cdest', preview.results[0].text]]);
   assert.equal(relay.state.routes[0].skipped, 1);
   assert.equal(previewRules({ config, source: 'line:csource', text: message().text }).results[0].text, null);
   assert.match(previewRules({ config, source: 'line:csource', sender: 'ubystander', text: message().text }).results[0].destinations[0].reason, /非指定發訊者/);
-  assert.match(previewRules({ config, source: 'line:csource', sender: 'uanalyst', text: '謝謝' }).results[0].destinations[0].reason, /沒有包含任一必要關鍵字/);
+  assert.match(previewRules({ config, source: 'line:csource', sender: 'usender', text: '謝謝' }).results[0].destinations[0].reason, /沒有包含任一必要關鍵字/);
 });
 test('overnight schedule belongs to starting weekday, end is exclusive, invalid schedules reject', () => {
   const schedule = { timezone: 'Asia/Taipei', days: [1], start: 22 * 60, end: 2 * 60, outside: 'hold' };
@@ -109,7 +109,7 @@ test('killing a separate synthetic process after sending checkpoint blocks resta
   await restarted.tick(); assert.equal(restarted.state.routes[0].phase, 'blocked'); assert.equal(line.calls.length, 0);
 });
 test('backlog exceeds bounded queues without losing messages or dedup evidence', async () => {
-  const line = adapter(Array.from({ length: 80 }, (_, i) => message(String(i), `Call ${i}`)));
+  const line = adapter(Array.from({ length: 80 }, (_, i) => message(String(i), `通知 ${i}`)));
   const relay = await createMultiRelay({ config: { version: 1, rules: [rule()] }, adapters: { line }, directory: await directory(), now: () => 1000,
     queueLimit: 7, deliveryBudget: 4, pause: async () => {} });
   for (let i = 0; i < 22; i++) await relay.tick();
@@ -119,9 +119,9 @@ test('backlog exceeds bounded queues without losing messages or dedup evidence',
 const media = { kind: 'photo', fileId: 'SYNTHETIC_FILE_ID', fileSize: 1024, caption: '' };
 test('media is opt-in, only Telegram to Telegram, bounded and sender-filtered', () => {
   assert.throws(() => rule({ media: true }));
-  const value = rule({ sources: [endpoint('-1', 'telegram')], destinations: [endpoint('-2', 'telegram')], media: true, prefix: '[Call] ', senderAllowlist: { 'telegram:-1': ['123'] } });
+  const value = rule({ sources: [endpoint('-1', 'telegram')], destinations: [endpoint('-2', 'telegram')], media: true, prefix: '[通知] ', senderAllowlist: { 'telegram:-1': ['123'] } });
   assert.equal(matchingContent(value, { ...message('a', '', '456'), media }, 'telegram:-1'), null);
-  assert.equal(matchingContent(value, { ...message('a', '', '123'), media }, 'telegram:-1').caption, '[Call] ');
+  assert.equal(matchingContent(value, { ...message('a', '', '123'), media }, 'telegram:-1').caption, '[通知] ');
   assert.throws(() => matchingContent(value, { ...message('a', '', '123'), media: { ...media, fileSize: 11 * 1024 * 1024 } }, 'telegram:-1'));
   assert.throws(() => matchingContent(value, { ...message('a', '', '123'), media: { ...media, fileSize: 10000001 } }, 'telegram:-1'));
   assert.throws(() => matchingContent(value, { ...message('a', '', '123'), media: { kind: 'unsupported' } }, 'telegram:-1'));
@@ -147,7 +147,7 @@ test('media queue survives offline restart and refuses corrupt or future payload
   assert.throws(() => parseJournal(JSON.stringify({ id: 'a', outcome: 'media_queued', payloadVersion: 2, payload: media }) + '\n'));
 });
 test('anonymous Telegram administrators use sender_chat identity, never pseudo-user attribution', () => {
-  const value = telegramMessage({ message: { chat: { id: -1 }, message_id: 1, date: 1, sender_chat: { id: -1 }, from: { id: 123, is_bot: true }, text: 'Call' } });
+  const value = telegramMessage({ message: { chat: { id: -1 }, message_id: 1, date: 1, sender_chat: { id: -1 }, from: { id: 123, is_bot: true }, text: '通知' } });
   assert.equal(value.from, 'chat:-1'); assert.equal(value.bot, false);
 });
 test('captionless images persist in the inbox and protected media never persists', async () => {
@@ -177,6 +177,6 @@ test('oversized journal stops before parsing and capacity preflight prevents pla
   await relay.tick(); assert.equal(line.calls.length, 0); assert.equal(relay.state.routes[0].phase, 'failed');
 });
 test('recent senders deduplicate stable identities and return no message content', () => {
-  const value = recentSenders([message(), message('b', 'SYNTHETIC_PRIVATE', 'uanalyst'), message('c', 'x', '')], 'line');
-  assert.deepEqual(value, [{ id: 'uanalyst', name: 'uanalyst' }]);
+  const value = recentSenders([message(), message('b', 'SYNTHETIC_PRIVATE', 'usender'), message('c', 'x', '')], 'line');
+  assert.deepEqual(value, [{ id: 'usender', name: 'usender' }]);
 });
