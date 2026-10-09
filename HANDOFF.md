@@ -18,6 +18,6 @@ v0.5.0 完成第一階段基本能力，v0.6.0 新增作者白名單、Call 範�
 
 [v0.7.0 固定版本下載與 SHA-256](https://github.com/b40609/LinePort/releases/tag/v0.7.0)
 
-前次 v0.6.0 發布證據保留在歷史驗證紀錄。v0.7.0 完成正常 commit／push、固定 tag、ZIP／SHA-256 發布後，於後續文件 commit 補入確切交付 SHA 與資產核對結果。
+v0.7.0 交付 commit／固定 tag：`7474b93085aeb1cb93e2c93c434dce51f5fa8b31`，已正常推送。原始碼 ZIP 共 103 項、526,271 bytes，沒有私人資料路徑。本機 SHA-256 `59108d6f2a9b4104d7be8188ca2e58d390d149f5f1e9abbbaa3ab39708e0495f` 與 GitHub 資產 digest 一致。版本頁、ZIP、SHA256SUMS 及 HTTPS 手機 JPEG 均回應 HTTP 200。後續文件 commit 補入發布證據，固定 ZIP 仍對應交付 tag；前次 v0.6.0 證據保留在歷史驗證紀錄。
 
 使用者以手機回報前次本機截圖無法載入，已改提供可公開的合成畫面：[HTTPS 手機畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.0/docs/assets/preview-mobile-0.7.jpg)。不發布使用者的附件。完成交付後要接續討論跨軟體多來源／多目的 Call 訊配置，確認目的平台／群數與去識別化樣本，不需再詢問是否繼續開發。

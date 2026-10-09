@@ -12,6 +12,7 @@
 - 18767 假服務瀏覽器驗證 LINE 分析師有效 Call 結尾含謝謝可轉、路人相同 Call／分析師純寒暄不轉、保存／編輯回填；Telegram 合成連結後欄位清空、圖片有效／超限／保護預覽。桌面與 390px 寬度無水平溢出，瀏覽器警告／錯誤記錄為空。
 - 公開畫面只含假名稱／ID／文字：[手機畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.0/docs/assets/preview-mobile-0.7.jpg)、[完整桌面畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.0/docs/assets/preview-0.7.jpg)。未發布使用者附件或私人資料。測試分頁已關閉，Mock 程序結束，18767 無監聽。
 - 本次 13 個新增／修改 mjs 模組的 `node --check`、頁面內嵌 JavaScript 語法與 `git diff --check` 通過；交付檔案另做限定憑證／個資特徵檢查，不代表完整歷史鑑識。
+- 正常推送交付 commit `7474b93085aeb1cb93e2c93c434dce51f5fa8b31` 與 v0.7.0 tag，發布固定原始碼 ZIP（103 項、526,271 bytes）及 SHA256SUMS。ZIP SHA-256 `59108d6f2a9b4104d7be8188ca2e58d390d149f5f1e9abbbaa3ab39708e0495f` 與 GitHub 資產 digest 一致，未包含私人資料路徑。版本頁、兩個下載資產及 HTTPS 手機 JPEG 均為 HTTP 200；完整 HASH 記錄於交接文件。
 - 原需求的實作／設計／評估成果見 [三階段對照](../docs/DEVELOPMENT-STATUS.md)。LINE 媒體／社群、LINE 全面加密及安全壓縮尚未實作；已完成支援界線與可回復方案評估。真實平台權限／回覆／媒體、朋友端與多日驗證未執行。[本版更新與限制](../docs/RELEASE-0.7.0.md)
 
 ## v0.6.0（2026-10-09）
