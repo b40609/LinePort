@@ -1,10 +1,12 @@
 # LinePort
 
-在 Windows 背景轉送 LINE 與 Telegram 訊息。v0.7.0 支援多來源、多目的、指定發訊者及選用的 Discord 文字目的。
+在 Windows 背景轉送 LINE 與 Telegram 訊息。v0.7.1 支援多來源、多目的、指定發訊者及選用的 Discord 文字目的。
+
+v0.7.1 補上分析師 2–3 來源 → 3–4 目的配置、配對數與附件限制提示，以及續抱／加減碼／出場的選用範例。三來源到四目的與重啟去重已用 Mock 驗證，136 項測試通過。[本次更新](docs/RELEASE-0.7.1.md)
 
 v0.7.0 補上可選來源的文字／媒體模擬、選用回覆關聯與重啟恢復、私人封存完整性驗證。沿用分析師白名單、規則搜尋／複製、台北時段、Telegram 圖片／檔案、工作隔離與選用 Bot Token DPAPI。新轉送選項預設關閉，保留不明發送不自動重送原則。[本版更新與限制](docs/RELEASE-0.7.0.md) · [開發項目與支援範圍](docs/DEVELOPMENT-STATUS.md) · [分析師 Call 訊設定](docs/CALL-ROUTING.md) · [後續交接](HANDOFF.md)
 
-[下載 v0.7.0 ZIP](https://github.com/b40609/LinePort/releases/download/v0.7.0/LinePort-v0.7.0.zip) · [更新與 SHA-256](docs/RELEASE-0.7.0.md) · [使用教學](docs/USAGE.md) · [運作原理](docs/ARCHITECTURE.md) · [安全說明](SECURITY.md)
+[下載 v0.7.1 ZIP](https://github.com/b40609/LinePort/releases/download/v0.7.1/LinePort-v0.7.1.zip) · [更新與 SHA-256](docs/RELEASE-0.7.1.md) · [使用教學](docs/USAGE.md) · [運作原理](docs/ARCHITECTURE.md) · [安全說明](SECURITY.md)
 
 [手機可開啟的示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.0/docs/assets/preview-mobile-0.7.jpg)（名稱、ID、訊息均為假資料）。
 
