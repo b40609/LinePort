@@ -11,6 +11,7 @@ import { createDiscordClient, DiscordRateLimit } from './discord.mjs';
 import { inspectDelivery } from './delivery-review.mjs';
 import { inSchedule } from './rule-options.mjs';
 import { readJournalFile, storageHealth } from './storage-health.mjs';
+import { sourceReply, destinationReply } from './reply-links.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -63,6 +64,8 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       if (saved.routeIdentity && saved.routeIdentity !== identity) throw new Error('Invalid identity');
       edge.seen = saved.seen;
       edge.pending = saved.pending;
+      edge.replies = saved.replies;
+      edge.delivered = saved.delivered;
       cooldowns.set(destination.platform, Math.max(cooldowns.get(destination.platform) || 0, saved.retryAt));
       status.pending = edge.pending.size;
       edge.startedAt = saved.startedAt || now();
@@ -155,7 +158,10 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
           }
           if (edge.destination.platform === 'telegram' && typeof text === 'string' && text.length > 4096) throw new RelayError('含前綴的文字超過 Telegram 4,096 字元上限；此路線已暫停');
           if (edge.destination.platform === 'discord' && (typeof text !== 'string' || text.length > 2000)) throw new RelayError('含前綴的文字超過 Discord 2,000 字元上限，已暫停此路線；請縮短內容或改選目的');
-          await edge.record(typeof text === 'string' ? { id, outcome: 'queued', text } : { id, outcome: 'media_queued', payloadVersion: 1, payload: text });
+          const parent = edge.rule.replies ? sourceReply(message, edge.source.platform, edge.source.id) : null;
+          const reply = parent ? { replyVersion: 1, replyTo: parent } : {};
+          await edge.record(typeof text === 'string' ? { id, outcome: 'queued', text, ...reply } : { id, outcome: 'media_queued', payloadVersion: 1, payload: text, ...reply });
+          if (parent) edge.replies.set(id, parent);
           edge.pending.set(id, text); edge.seen.add(id);
         }
       } catch (error) {
@@ -191,11 +197,14 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             status.stage = 'journal';
             await edge.record({ id, outcome: 'sending' }); edge.seen.add(id);
             status.stage = 'send';
+            const parent = edge.replies.get(id);
+            const replyTo = edge.rule.replies && parent ? destinationReply(edge.destination.platform, edge.destination.id, edge.delivered.get(parent)) : undefined;
+            status.replyNotice = parent && !replyTo ? '原訊息未轉送、尚未確認送達或沒有可用對照；這則改送一般訊息，不補送原訊息' : replyTo ? (edge.destination.platform === 'line' ? '引用此路線已確認送達的原訊息；引用失敗會暫停此路線，請先確認平台狀態' : '引用此路線已確認送達的原訊息；平台找不到原訊息時可能改送一般訊息') : '';
             let result;
             try {
               attempted = true;
               attemptedDestinations.add(destinationKey);
-              result = await withDeadline(adapters[edge.destination.platform].send(edge.destination.id, text), operationTimeoutMs);
+              result = await withDeadline(adapters[edge.destination.platform].send(edge.destination.id, text, replyTo ? { replyTo } : {}), operationTimeoutMs);
               if (!result?.id) throw new Error('Missing acknowledgement');
             } catch (error) {
               if (edge.destination.platform === 'telegram' && error instanceof TelegramRateLimit || edge.destination.platform === 'discord' && error instanceof DiscordRateLimit) {
@@ -213,7 +222,9 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             status.stage = 'journal';
             const key = `${adapters[edge.destination.platform].identity}:${endpointKey(edge.destination)}:${result.id}`;
             await writeRecord(outputFile, { key }); outputs.add(key);
-            await edge.record({ id, outcome: 'sent' });
+            const acknowledged = destinationReply(edge.destination.platform, edge.destination.id, result.id);
+            await edge.record({ id, outcome: 'sent', ...(acknowledged ? { destinationId: acknowledged } : {}) });
+            if (acknowledged) edge.delivered.set(id, acknowledged);
             edge.pending.delete(id);
             status.forwarded++; status.lastSend = new Date(now()).toISOString();
           }
@@ -250,7 +261,7 @@ export async function runMultiRelay(state, directory, { createLineService }) {
   if (endpoints.some(endpoint => endpoint.platform === 'discord')) {
     try {
       const client = createDiscordClient(await store.discordToken()), me = await client.getMe();
-      adapters.discord = { identity: `discord:${me.id}`, prepare: id => client.getChannel(id), send: (id, text) => client.send(id, text) };
+      adapters.discord = { identity: `discord:${me.id}`, prepare: id => client.getChannel(id), send: (id, text, options) => client.send(id, text, options) };
     } catch (error) { platformErrors.discord = error instanceof RelayError ? error.message : 'Discord 連結失敗；請檢查 Bot 與目的頻道權限'; }
   }
   if (endpoints.some(endpoint => endpoint.platform === 'line')) {
@@ -271,7 +282,7 @@ export async function runMultiRelay(state, directory, { createLineService }) {
           if (service.loginRequired) throw new RelayError('LINE 登入已失效，請停止後重新授權');
           return readLineSince(service, id, time, known);
         },
-        send: (id, text) => sendRelayText(service, id, text),
+        send: (id, text, options) => sendRelayText(service, id, text, options),
       };
     } catch (error) { platformErrors.line = error instanceof RelayError ? error.message : 'LINE 連結失敗，請檢查登入、好友列表與 E2EE 金鑰'; }
   }
@@ -292,7 +303,7 @@ export async function runMultiRelay(state, directory, { createLineService }) {
         },
         async read(id) { if (pollError) throw new RelayError(pollError); return inbox.messages(id); },
         health: () => ({ polls, lastPoll, ...inbox.health() }),
-        send: (id, text) => client.send(id, text),
+        send: (id, text, options) => client.send(id, text, options),
       };
       if (sourceIds.length) {
         async function receive() {

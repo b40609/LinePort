@@ -1,4 +1,5 @@
 import { RelayError } from './relay-health.mjs';
+import { destinationReply } from './reply-links.mjs';
 
 export const discordId = id => typeof id === 'string' && /^[1-9]\d{5,19}$/.test(id) && BigInt(id) < (1n << 64n);
 export class DiscordRateLimit extends RelayError {
@@ -31,10 +32,12 @@ export function createDiscordClient(token, { request = fetch } = {}) {
       if (channel?.id !== id || channel.type !== 0 || !discordId(channel.guild_id)) throw new RelayError('目前僅支援 Discord 伺服器的一般文字目的頻道；私訊、討論串及公告頻道尚未支援');
       return channel;
     },
-    async send(id, text) {
+    async send(id, text, { replyTo } = {}) {
       check(id);
       if (typeof text !== 'string' || !text.trim() || text.length > 2000) throw new RelayError('Discord 文字含前綴後不可超過 2,000 字元；請縮短內容或改選目的');
-      const result = await call(`/channels/${id}/messages`, { content: text, allowed_mentions: { parse: [], users: [], roles: [], replied_user: false }, flags: 4 });
+      if (replyTo !== undefined && !destinationReply('discord', id, replyTo)) throw new RelayError('Discord 回覆對照格式不正確，請停止並核對紀錄');
+      const result = await call(`/channels/${id}/messages`, { content: text, allowed_mentions: { parse: [], users: [], roles: [], replied_user: false }, flags: 4,
+        ...(replyTo ? { message_reference: { message_id: replyTo, channel_id: id, fail_if_not_exists: false } } : {}) });
       return { id: discordId(result?.id) && result.channel_id === id ? result.id : '' };
     },
   };

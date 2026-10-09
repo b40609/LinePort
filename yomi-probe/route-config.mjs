@@ -61,12 +61,12 @@ export function normalizeConfig(input) {
   for (const node of graph.keys()) visit(node);
   return { version: 1, rules };
 }
-export function textRejection(rule, message, sourceKey) {
+export function textRejection(rule, message, sourceKey, allowEmpty = false) {
   if (!senderMatches(rule, sourceKey, message)) return '非指定發訊者；請核對此來源的人員 ID';
   if (rule.schedule?.outside === 'skip' && !inSchedule(rule.schedule, Number(message.createdTime || message.deliveredTime))) return '訊息時間在時段外；此規則設定為略過';
   if (message.protected) return '平台標示為受保護內容，不轉送';
   if (message.e2eeDecryptFailure) return '無法解密原訊息，請先確認來源可正常讀取';
-  if (typeof message.text !== 'string' || !message.text.trim()) return '沒有可轉送的文字';
+  if (typeof message.text !== 'string' || !allowEmpty && !message.text.trim()) return '沒有可轉送的文字';
   const text = message.text.toLocaleLowerCase();
   if (rule.include.length && !rule.include.some(word => text.includes(word.toLocaleLowerCase()))) return '沒有包含任一必要關鍵字；請核對 Call 訊格式';
   if (rule.exclude.some(word => text.includes(word.toLocaleLowerCase()))) return '包含排除關鍵字；請核對是否誤排除有效 Call 訊';
@@ -78,10 +78,7 @@ export function matchingText(rule, message, sourceKey) {
 }
 export function matchingContent(rule, message, sourceKey) {
   if (!message.media || !rule.media) return matchingText(rule, message, sourceKey);
-  if (message.protected || message.e2eeDecryptFailure || !senderMatches(rule, sourceKey, message)
-    || rule.schedule?.outside === 'skip' && !inSchedule(rule.schedule, Number(message.createdTime || message.deliveredTime))) return null;
-  const text = (message.text || '').toLocaleLowerCase();
-  if (rule.include.length && !rule.include.some(word => text.includes(word.toLocaleLowerCase())) || rule.exclude.some(word => text.includes(word.toLocaleLowerCase()))) return null;
+  if (textRejection(rule, message, sourceKey, true) !== null) return null;
   try { return mediaPayload({ ...message.media, caption: rule.prefix + (message.text || '') }); }
   catch { throw new RelayError('圖片／檔案格式、大小或說明不符限制，已暫停此路線；請核對 10／50 MB 大小及 1,024 字元說明，保留原訊息後調整規則'); }
 }

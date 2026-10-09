@@ -2,6 +2,7 @@ import { open } from 'node:fs/promises';
 import { unseenText } from './relay-rules.mjs';
 import { mediaPayload } from './media-payload.mjs';
 import { assertWritable, readJournalFile } from './storage-health.mjs';
+import { validMessageId } from './reply-links.mjs';
 
 export async function appendRecord(file, row) {
   await assertWritable(file);
@@ -13,12 +14,20 @@ export async function appendRecord(file, row) {
 }
 
 export function parseJournal(text) {
-  const result = { seen: new Set(), pending: new Map(), retryAt: 0, startedAt: null, routeIdentity: null };
+  const result = { seen: new Set(), pending: new Map(), replies: new Map(), delivered: new Map(), retryAt: 0, startedAt: null, routeIdentity: null };
   // A truncated final row is ambiguous. Fail closed; never discard it and resend.
   if (text && !text.endsWith('\n')) throw new Error('Incomplete journal');
   for (const line of text.split('\n').filter(line => line.trim())) {
     const row = JSON.parse(line);
     if (!row || typeof row !== 'object') throw new Error('Invalid journal');
+    if ('replyTo' in row || 'replyVersion' in row) {
+      if (!['queued', 'media_queued'].includes(row.outcome) || row.replyVersion !== 1 || !validMessageId(row.replyTo)) throw new Error('Invalid queued reply');
+      result.replies.set(row.id, row.replyTo);
+    }
+    if ('destinationId' in row) {
+      if (row.outcome !== 'sent' || !result.pending.has(row.id) || !validMessageId(row.destinationId)) throw new Error('Invalid reply acknowledgement');
+      result.delivered.set(row.id, row.destinationId);
+    }
     if ('startedAt' in row) {
       if (!Number.isFinite(row.startedAt) || row.startedAt <= 0 || result.startedAt !== null) throw new Error('Invalid baseline');
       result.startedAt = row.startedAt;

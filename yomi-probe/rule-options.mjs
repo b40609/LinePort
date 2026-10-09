@@ -20,7 +20,8 @@ export function normalizeOptions(rule, sources, destinations) {
   }
   if (rule.media !== undefined && typeof rule.media !== 'boolean') invalid('圖片與檔案設定需為開啟或關閉');
   if (rule.media && [...sources, ...destinations].some(value => value.platform !== 'telegram')) invalid('圖片／檔案目前僅支援同一 Bot 的 Telegram → Telegram；請另建純 Telegram 規則');
-  return { senderAllowlist, schedule, media: rule.media === true };
+  if (rule.replies !== undefined && typeof rule.replies !== 'boolean') invalid('回覆關聯設定需為開啟或關閉');
+  return { senderAllowlist, schedule, media: rule.media === true, replies: rule.replies === true };
 }
 export function inSchedule(schedule, timestamp) {
   if (!schedule) return true;

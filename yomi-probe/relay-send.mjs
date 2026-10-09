@@ -1,5 +1,10 @@
+import { destinationReply } from './reply-links.mjs';
 // The public service already encrypts text; its argument must remain a string.
-export function sendRelayText(service, destination, text) {
+export function sendRelayText(service, destination, text, { replyTo } = {}) {
+  if (replyTo !== undefined) {
+    if (!destinationReply('line', destination, replyTo)) throw new Error('Invalid LINE reply');
+    return service.sendMessage(destination, text, undefined, { relatedMessageId: replyTo, messageRelationType: 3, relatedMessageServiceCode: 1 });
+  }
   return service.sendMessage(destination, text);
 }
 

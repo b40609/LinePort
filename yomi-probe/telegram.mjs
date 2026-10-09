@@ -3,6 +3,7 @@ import { appendRecord } from './relay-core.mjs';
 import { RelayError } from './relay-health.mjs';
 import { mediaPayload } from './media-payload.mjs';
 import { readJournalFile, storageHealth } from './storage-health.mjs';
+import { destinationReply } from './reply-links.mjs';
 export class TelegramRateLimit extends RelayError {
   constructor(seconds) {
     super('Telegram 限流，等待後自動重試');
@@ -39,13 +40,17 @@ export function createTelegramClient(token, { request = fetch } = {}) {
     getChat: id => call('getChat', { chat_id: id }),
     getChatMember: (id, userId) => call('getChatMember', { chat_id: id, user_id: userId }),
     getUpdates: (offset, timeout = 15) => call('getUpdates', { offset, timeout, limit: 100, allowed_updates: ['message', 'channel_post'] }),
-    async send(id, text) {
+    async send(id, text, { replyTo } = {}) {
       let method = 'sendMessage', data = { chat_id: id, text };
       if (typeof text !== 'string') {
         const payload = mediaPayload(text);
         method = payload.kind === 'photo' ? 'sendPhoto' : 'sendDocument';
         data = { chat_id: id, [payload.kind]: payload.fileId, caption: payload.caption };
       } else if (!text || text.length > 4096) throw new RelayError('Telegram 文字含前綴後不可超過 4,096 字元');
+      if (replyTo !== undefined) {
+        if (!destinationReply('telegram', String(id), replyTo)) throw new RelayError('Telegram 回覆對照不符目的聊天室，請停止並核對紀錄');
+        data.reply_parameters = { message_id: Number(replyTo.split(':')[1]), allow_sending_without_reply: true };
+      }
       const result = await call(method, data);
       const confirmed = Number.isSafeInteger(result?.message_id) && result.message_id > 0
         && Number.isSafeInteger(result.chat?.id) && String(result.chat.id) === String(id);
@@ -64,6 +69,8 @@ export function telegramMessage(update) {
     catch { media = { kind: 'unsupported' }; }
   }
   return { id: `${message.chat.id}:${message.message_id}`, chatId: String(message.chat.id),
+    ...(Number.isSafeInteger(message.reply_to_message?.message_id) && message.reply_to_message.message_id > 0 && message.reply_to_message.chat?.id === message.chat.id
+      ? { replyTo: `${message.chat.id}:${message.reply_to_message.message_id}` } : {}),
     createdTime: Number(message.date) * 1000, text: typeof message.text === 'string' ? message.text : typeof message.caption === 'string' ? message.caption : '', ...(media ? { media } : {}),
     protected: Boolean(message.has_protected_content || message.chat.has_protected_content || message.is_paid_post || message.is_ephemeral),
     from: message.sender_chat ? `chat:${message.sender_chat.id}` : String(message.from?.id || ''), bot: !message.sender_chat && Boolean(message.from?.is_bot) };
@@ -77,6 +84,7 @@ export async function createTelegramInbox(file, client, sourceIds) {
       const message = row.message;
       if (typeof message.id !== 'string' || typeof message.chatId !== 'string' || typeof message.text !== 'string' || !Number.isSafeInteger(message.createdTime) || message.createdTime <= 0) throw new Error('Invalid Telegram message');
       if (message.media && message.media.kind !== 'unsupported') mediaPayload(message.media);
+      if (message.replyTo !== undefined && !destinationReply('telegram', message.chatId, message.replyTo)) throw new Error('Invalid Telegram reply');
     }
   }
   function apply(row) {
