@@ -10,7 +10,7 @@
 
 下一步需要去識別化文字範例（進場、續抱、出場等），確認只有代碼／價位的短 Call，才決定內容條件；無需提供真實帳號或憑證。目的 LINE／Telegram 各幾群尚未確定，教學用兩群加兩群作假設。維持 Mock、不自動啟動真實轉送，跨 LINE 圖片為後續工程。
 
-本次發布 SHA 與 ZIP 核對結果於發布後補入。下方保留 v0.7.0 開發與研究記錄。
+v0.7.1 交付 commit／固定 tag：`c6b09d4d759141cb2b2d8e44302fea8f278543de`，已正常推送。[公開版本下載](https://github.com/b40609/LinePort/releases/tag/v0.7.1) 包含原始碼 ZIP（105 項、533,009 bytes）與 SHA256SUMS。ZIP 未包含私人資料路徑；本機 SHA-256 `96d1ea012f3634ca1b23339d32f71c83b5bf1950958e1990dc63b2663acd43cf` 與 GitHub 資產 digest 一致，版本頁、ZIP、SHA256SUMS 均回應 HTTP 200。後續文件 commit 補入發布證據，固定 ZIP 仍對應交付 tag。下方保留 v0.7.0 開發與研究記錄。
 
 2026-10-09，v0.7.0，master。接續 v0.6.0 tag 5d76031597f66653dc3d2bd6d8913c513c925a67 及文件 commit fd85901；工作目錄 `C:\Users\user\Documents\ChatGPT\line_call`，Desktop 是捷徑。此次開始時沒有未提交變更。先確認實際 Git 狀態與目前內容，不覆蓋後續工作。
 

@@ -8,6 +8,7 @@
 - `npm.cmd audit --omit=dev`：本次查詢已知依賴漏洞 0，沒有新增／更新依賴。既有磁碟失敗、獨立程序中止、限流與不明發送不重送測試亦通過。
 - 本次新增測試及修改模組 `node --check`、頁面內嵌 JavaScript 語法、`git diff --check` 通過。12 個交付檔案的限定憑證格式檢查沒有匹配；沒有讀取私人資料，不代表全面安全鑑識。
 - Call 範例只在使用者點選時加入續抱、加碼、減碼、出場；既有設定不自動變更。LINE 圖片、跨 LINE 媒體與 OCR 未支援。配置與取捨見 [Call 訊教學](../docs/CALL-ROUTING.md)。
+- 正常推送交付 commit `c6b09d4d759141cb2b2d8e44302fea8f278543de` 與 v0.7.1 tag，發布固定原始碼 ZIP（105 項、533,009 bytes）及 SHA256SUMS。ZIP 未包含私人資料路徑，SHA-256 `96d1ea012f3634ca1b23339d32f71c83b5bf1950958e1990dc63b2663acd43cf` 與 GitHub 資產 digest 一致；公開版本頁、ZIP、SHA256SUMS 均回應 HTTP 200。
 
 ## v0.7.0（2026-10-09）
 
