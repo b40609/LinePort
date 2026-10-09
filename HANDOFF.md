@@ -17,3 +17,5 @@ v0.5.0 第一階段已有引導、規則摘要／純文字預覽、逐筆人工�
 安全診斷可分享；設定備份、私人封存及完整資料不可公開。Bot Token DPAPI 選用、綁原 Windows 帳號，舊明文檔保留；LINE 登入／E2EE 及訊息仍未加密。受保護檔損壞不退回舊 Token，換機重新連結。新作者、時段、媒體與人工決策不能直接用舊版處理；回復需先停止並規劃一致的程式與完整私人備份。保持單一程序使用同一資料目錄。
 
 [v0.6.0 固定版本下載與 SHA-256](https://github.com/b40609/LinePort/releases/tag/v0.6.0)
+
+發布已完成：程式交付 commit／tag 為 `5d76031597f66653dc3d2bd6d8913c513c925a67`／`v0.6.0`，正常推送 master，沒有 force push。原始碼 ZIP 共 95 個項目，排除私人資料路徑；ZIP SHA-256：`faad40e31a24df7460a8dc0c0e274ae8e9dd4a53ddb44ca2f72653555a5115d7`，與 GitHub 上傳資產 digest 一致。這段發布證據以後續文件 commit 保存，版本 ZIP 固定於上述 tag。
