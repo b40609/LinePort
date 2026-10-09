@@ -6,11 +6,59 @@ import path from 'node:path';
 import { normalizeConfig, matchingText, createSettingsStore, configRevision } from './route-config.mjs';
 import { createMultiRelay } from './multi-relay.mjs';
 import { readLineSince, lineDirectory } from './line-directory.mjs';
+import { TelegramRateLimit } from './telegram.mjs';
 
 const endpoint = (id, platform = 'line') => ({ platform, id, name: id });
 const rule = (id = 'one', sources = [endpoint('csource')], destinations = [endpoint('cdestination')]) => ({ id, name: id, enabled: true, sources, destinations });
 const config = (...rules) => normalizeConfig({ version: 1, rules });
 const fixture = async () => mkdtemp(path.join(os.tmpdir(), 'lineport-routing-'));
+
+test('durable pending payload survives restart even when the source is unavailable', async () => {
+  const directory = await fixture(), value = config(rule());
+  const line = adapter({ messages: [message('a', 'first'), message('b', 'second')] });
+  const options = { config: value, adapters: { line }, directory, now: () => 1000, pause: async () => {}, deliveryBudget: 1 };
+  const relay = await createMultiRelay(options);
+  await relay.tick();
+  assert.equal(relay.state.routes[0].pending, 1);
+  line.read = async () => { throw new Error('offline'); };
+  const restarted = await createMultiRelay(options);
+  assert.equal(restarted.state.routes[0].pending, 1);
+  await restarted.tick();
+  assert.deepEqual(line.calls.map(call => call[1]), ['first', 'second']);
+  assert.equal(restarted.state.routes[0].pending, 0);
+});
+
+test('shared destination rotates sources across bounded ticks without losing capacity overflow', async () => {
+  const line = adapter();
+  line.read = async id => Array.from({ length: 3 }, (_, i) => message(`${id}-${i}`, `${id}-${i}`));
+  const relay = await createMultiRelay({ config: config(rule('one', [endpoint('ca'), endpoint('cb')])), adapters: { line },
+    directory: await fixture(), now: () => 1000, pause: async () => {}, queueLimit: 1, deliveryBudget: 1 });
+  await relay.tick();
+  assert.match(relay.state.routes[1].warning, /容量/);
+  for (let i = 0; i < 5; i++) await relay.tick();
+  assert.deepEqual(line.calls.map(call => call[1]), ['ca-0', 'cb-0', 'ca-1', 'cb-1', 'ca-2', 'cb-2']);
+  assert.equal(relay.state.routes.reduce((sum, row) => sum + row.pending, 0), 0);
+});
+
+test('explicit Telegram rate limit persists cooldown and retries queued payload after restart', async () => {
+  const directory = await fixture(), value = config(rule('one', [endpoint('cs')], [endpoint('-1', 'telegram')]));
+  let clock = 1000, attempts = 0;
+  const line = adapter({ messages: [message('a')] });
+  const telegram = adapter({ send: async () => { if (++attempts === 1) throw new TelegramRateLimit(5); return { id: '-1:1' }; } });
+  const options = { config: value, adapters: { line, telegram }, directory, now: () => clock, pause: async () => {} };
+  const relay = await createMultiRelay(options);
+  await relay.tick();
+  assert.equal(relay.state.uncertain, 0);
+  assert.equal(relay.state.routes[0].pending, 1);
+  const restarted = await createMultiRelay(options);
+  await restarted.tick();
+  assert.equal(attempts, 1);
+  clock = 6000;
+  await restarted.tick();
+  assert.equal(attempts, 2);
+  assert.equal(restarted.state.forwarded, 1);
+  assert.equal(restarted.state.routes[0].pending, 0);
+});
 const message = (id, text = 'hello', time = 1100) => ({ id, text, createdTime: time, deliveredTime: time });
 function adapter({ recent = [], messages = [], send } = {}) {
   const calls = [], reads = [];

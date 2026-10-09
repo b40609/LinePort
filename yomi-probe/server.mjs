@@ -54,7 +54,10 @@ const server = http.createServer(async (req, res) => {
     if (!authorized(req, token)) return send(res, 403, { error: '請從本機首頁開啟' });
     if (req.method === 'GET' && req.url === '/api/status') return send(res, 200, state);
     if (req.method === 'GET' && req.url === '/api/relay/status') return send(res, 200, { ...(relayController ? await relayController.status() : { phase: 'unavailable' }), action: relayAction });
-    if (req.method === 'GET' && req.url === '/api/rules' && settingsStore) return send(res, 200, { config: await settingsStore.load(), telegramConfigured: Boolean(await settingsStore.telegramToken()) });
+    if (req.method === 'GET' && req.url === '/api/rules' && settingsStore) {
+      const config = await settingsStore.load();
+      return send(res, 200, { config, revision: configRevision(config), telegramConfigured: Boolean(await settingsStore.telegramToken()) });
+    }
     if (req.method !== 'POST') return send(res, 404, { error: '找不到操作' });
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
     const input = await readJson(req, req.url === '/api/rules' ? 65536 : 4096);
@@ -68,8 +71,11 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/rules' && settingsStore) {
       await requireStopped();
       const config = normalizeConfig(input);
-      await operation(() => settingsStore.save(config));
-      return send(res, 200, { config });
+      await operation(async () => {
+        if (input.revision !== configRevision(await settingsStore.load())) throw new HttpError(409, '規則已被其他視窗更新；請先保留編輯內容，重新整理後再修改');
+        await settingsStore.save(config);
+      });
+      return send(res, 200, { config, revision: configRevision(config) });
     }
     if (req.url === '/api/telegram/connect' && settingsStore) {
       await requireStopped();

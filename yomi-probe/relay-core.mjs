@@ -10,7 +10,7 @@ export async function appendRecord(file, row) {
 }
 
 export function parseJournal(text) {
-  const result = { seen: new Set(), startedAt: null, routeIdentity: null };
+  const result = { seen: new Set(), pending: new Map(), retryAt: 0, startedAt: null, routeIdentity: null };
   // A truncated final row is ambiguous. Fail closed; never discard it and resend.
   if (text && !text.endsWith('\n')) throw new Error('Incomplete journal');
   for (const line of text.split('\n').filter(line => line.trim())) {
@@ -26,8 +26,16 @@ export function parseJournal(text) {
     } else if ('routeIdentity' in row) {
       if (!/^[a-f0-9]{64}$/.test(row.routeIdentity) || result.routeIdentity) throw new Error('Invalid route identity');
       result.routeIdentity = row.routeIdentity;
+    } else if (typeof row.id === 'string' && row.outcome === 'retry') {
+      if (!result.pending.has(row.id) || !Number.isSafeInteger(row.retryAt) || row.retryAt <= 0) throw new Error('Invalid retry');
+      result.retryAt = Math.max(result.retryAt, row.retryAt);
+    } else if (typeof row.id === 'string' && row.id && row.outcome === 'queued') {
+      if (typeof row.text !== 'string' || !row.text || result.seen.has(row.id)) throw new Error('Invalid queued message');
+      result.pending.set(row.id, row.text);
+      result.seen.add(row.id);
     } else if (typeof row.id === 'string' && row.id && ['baseline', 'sending', 'sent', 'uncertain'].includes(row.outcome)) {
       result.seen.add(row.id);
+      if (row.outcome === 'sent') result.pending.delete(row.id);
     } else { throw new Error('Unknown journal record'); }
   }
   if (result.seen.size && result.startedAt === null) throw new Error('Missing baseline');

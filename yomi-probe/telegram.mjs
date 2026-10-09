@@ -1,6 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { appendRecord } from './relay-core.mjs';
 import { RelayError } from './relay-health.mjs';
+export class TelegramRateLimit extends RelayError {
+  constructor(seconds) {
+    super('Telegram 限流，等待後自動重試');
+    this.retryAfterMs = seconds * 1000;
+  }
+}
 
 export function createTelegramClient(token, { request = fetch } = {}) {
   if (typeof token !== 'string' || !/^\d{4,20}:[a-zA-Z0-9_-]{20,100}$/.test(token)) throw new RelayError('請設定有效的 Telegram Bot Token');
@@ -12,6 +18,9 @@ export function createTelegramClient(token, { request = fetch } = {}) {
       });
       const body = await response.json();
       if (!response.ok || !body.ok) {
+        if (response.status === 429 && body.ok === false && body.error_code === 429
+          && Number.isSafeInteger(body.parameters?.retry_after) && body.parameters.retry_after > 0
+          && body.parameters.retry_after <= 2147483) throw new TelegramRateLimit(body.parameters.retry_after);
         const messages = { 401: 'Telegram Token 無效', 403: 'Telegram Bot 沒有讀取或發送權限', 409: 'Telegram 更新被其他程式或 webhook 占用', 429: 'Telegram 發送過於頻繁，請稍後再啟動該路線' };
         throw new RelayError(messages[body.error_code] || 'Telegram API 拒絕操作，請檢查聊天室 ID 與 Bot 權限');
       }
@@ -67,6 +76,7 @@ export async function createTelegramInbox(file, client, sourceIds) {
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   return {
     messages: id => [...messages.values()].filter(message => message.chatId === id),
+    health: () => ({ warning: messages.size >= 40000 ? `Telegram 收件紀錄接近容量（${messages.size}/50000），請停止並備份` : '' }),
     async poll() {
       if (halted) throw new RelayError('Telegram 本機收件紀錄寫入失敗，請停止並檢查紀錄；尚未確認的新更新會保留在 Telegram');
       if (messages.size >= 50000) throw new RelayError('Telegram 本機收件紀錄已達 50,000 則，請先停止並整理備份');

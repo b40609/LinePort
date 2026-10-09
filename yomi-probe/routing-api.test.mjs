@@ -30,12 +30,26 @@ async function setup(t) {
 const endpoint = (id, platform = 'line') => ({ id, platform, name: '同名' });
 const config = (platform = 'line') => ({ version: 1, rules: [{ id: 'rule', name: '同名群組測試', enabled: true,
   sources: [endpoint(platform === 'line' ? 'c1' : '-1', platform)], destinations: [endpoint(platform === 'line' ? 'u1' : '-2', platform)] }] });
+async function saveRules(call, value) {
+  return call('rules', { ...value, revision: (await call('rules')).body.revision });
+}
+
+test('stale and missing revisions cannot overwrite another window changes', async t => {
+  const { call } = await setup(t);
+  const initial = (await call('rules')).body;
+  const first = await call('rules', { ...config(), revision: initial.revision });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.revision, configRevision(first.body.config));
+  assert.equal((await call('rules', { ...config('telegram'), revision: initial.revision })).status, 409);
+  assert.equal((await call('rules', config('telegram'))).status, 409);
+  assert.deepEqual((await call('rules')).body.config, first.body.config);
+});
 
 test('saved rules accept duplicate display names and dispatch a revision instead of names', async t => {
   const { call, starts } = await setup(t);
   assert.equal((await call('resume', {})).status, 200);
   assert.equal((await call('directory', {})).body.endpoints.length, 2);
-  const saved = await call('rules', config());
+  const saved = await saveRules(call, config());
   assert.equal(saved.status, 200);
   assert.equal((await call('relay/start', { useRules: true })).status, 202);
   assert.deepEqual(starts, [configRevision(saved.body.config)]);
@@ -48,7 +62,7 @@ test('Telegram-only rules do not require LINE login and stored tokens never retu
   const result = await call('rules');
   assert.equal(result.body.telegramConfigured, true);
   assert.ok(!JSON.stringify(result).includes(secret));
-  assert.equal((await call('rules', config('telegram'))).status, 200);
+  assert.equal((await saveRules(call, config('telegram'))).status, 200);
   assert.equal((await call('relay/start', { useRules: true })).status, 202);
   assert.equal(starts.length, 1);
 });
@@ -72,7 +86,7 @@ test('Telegram directory exposes only identifiers and names, never message conte
 
 test('LINE endpoints require login, and invalid rule graphs cannot be persisted', async t => {
   const { call, starts } = await setup(t);
-  assert.equal((await call('rules', config())).status, 200);
+  assert.equal((await saveRules(call, config())).status, 200);
   assert.equal((await call('relay/start', { useRules: true })).status, 401);
   const invalid = config(); invalid.rules[0].destinations = invalid.rules[0].sources;
   assert.equal((await call('rules', invalid)).status, 400);

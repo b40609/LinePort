@@ -3,10 +3,32 @@ import assert from 'node:assert/strict';
 import { mkdtemp, appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createTelegramClient, createTelegramInbox, telegramMessage } from './telegram.mjs';
+import { createTelegramClient, createTelegramInbox, telegramMessage, TelegramRateLimit } from './telegram.mjs';
 
 const token = '123456:synthetic_token_for_tests_only';
 const update = (id, extra = {}) => ({ update_id: id, message: { message_id: id, chat: { id: -123 }, date: 1000, text: 'synthetic text', ...extra } });
+
+test('only explicit validated Telegram 429 responses permit safe retry', async () => {
+  for (const seconds of [5, 0, -1, '5', undefined, 2147484]) {
+    const client = createTelegramClient(token, { request: async () => ({ status: 429, ok: false,
+      json: async () => ({ ok: false, error_code: 429, parameters: { retry_after: seconds }, description: token }) }) });
+    await assert.rejects(client.send('-123', 'test'), error => {
+      assert.equal(error instanceof TelegramRateLimit, seconds === 5);
+      assert.ok(!error.message.includes(token));
+      if (seconds === 5) assert.equal(error.retryAfterMs, 5000);
+      return true;
+    });
+  }
+});
+
+test('inbox warns at 80 percent without exposing stored message content', async () => {
+  const file = path.join(await mkdtemp(path.join(os.tmpdir(), 'lineport-capacity-')), 'inbox.jsonl');
+  await appendFile(file, Array.from({ length: 40000 }, (_, i) => JSON.stringify({ offset: i + 1,
+    message: { id: String(i), chatId: '-123', text: 'SYNTHETIC_PRIVATE_TEXT', createdTime: 1000 } }) + '\n').join(''));
+  const inbox = await createTelegramInbox(file, {}, ['-123']);
+  assert.match(inbox.health().warning, /40000\/50000/);
+  assert.ok(!JSON.stringify(inbox.health()).includes('SYNTHETIC_PRIVATE_TEXT'));
+});
 
 test('Telegram API errors never expose the token or upstream diagnostic strings', async () => {
   for (const request of [async () => { throw new Error(`https://example/${token}`); }, async () => ({ ok: false, json: async () => ({ error_code: 403, description: token }) })]) {

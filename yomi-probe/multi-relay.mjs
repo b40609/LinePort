@@ -7,7 +7,7 @@ import { createSettingsStore, configRevision, endpointKey, matchingText } from '
 import { lineDirectory, readLineSince } from './line-directory.mjs';
 import { requireRelayEncryption, inspectRelayRead, RelayError } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
-import { createTelegramClient, createTelegramInbox } from './telegram.mjs';
+import { createTelegramClient, createTelegramInbox, TelegramRateLimit } from './telegram.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -27,7 +27,10 @@ async function rowsFrom(file) {
     return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
   } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
-export async function createMultiRelay({ config, adapters, platformErrors = {}, directory, now = Date.now, pause = sleep, operationTimeoutMs = 30000 }) {
+export async function createMultiRelay({ config, adapters, platformErrors = {}, directory, now = Date.now, pause = sleep, operationTimeoutMs = 30000, queueLimit = 1000, deliveryBudget = 10 }) {
+  if (!Number.isSafeInteger(queueLimit) || queueLimit < 1 || !Number.isSafeInteger(deliveryBudget) || deliveryBudget < 1) throw new Error('Invalid queue limits');
+  const cursors = new Map();
+  const cooldowns = new Map();
   const outputFile = path.join(directory, 'lineport-output.jsonl');
   const outputs = new Set();
   for (const row of await rowsFrom(outputFile)) {
@@ -54,12 +57,15 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       const saved = await loadJournal(edge.file);
       if (saved.routeIdentity && saved.routeIdentity !== identity) throw new Error('Invalid identity');
       edge.seen = saved.seen;
+      edge.pending = saved.pending;
+      cooldowns.set(destination.platform, Math.max(cooldowns.get(destination.platform) || 0, saved.retryAt));
+      status.pending = edge.pending.size;
       edge.startedAt = saved.startedAt || now();
       if (!saved.routeIdentity) await edge.record({ routeIdentity: identity });
       const journal = await rowsFrom(edge.file), unresolved = new Set();
       for (const row of journal) {
         if (row.outcome === 'sending' || row.outcome === 'uncertain') unresolved.add(row.id);
-        if (row.outcome === 'sent') unresolved.delete(row.id);
+        if (row.outcome === 'sent' || row.outcome === 'retry') unresolved.delete(row.id);
       }
       if (unresolved.size) {
         status.phase = 'blocked'; status.stage = 'send_uncertain'; status.uncertain = unresolved.size;
@@ -85,7 +91,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     state.errors += [...sources.values()].reduce((sum, source) => sum + source.failures, 0);
     state.sources = [...sources.values()].map(source => ({ ...source.endpoint, polls: source.polls, lastPoll: source.lastPoll, received: source.received, decryptFailed: source.decryptFailed, warning: source.warning }));
     state.phase = edges.every(edge => ['failed', 'blocked'].includes(edge.status.phase)) ? 'failed'
-      : edges.some(edge => edge.status.phase !== 'running') || [...sources.values()].some(source => source.warning) ? 'degraded' : 'running';
+      : edges.some(edge => edge.status.phase !== 'running' || edge.status.warning) || [...sources.values()].some(source => source.warning) ? 'degraded' : 'running';
     state.warning = state.phase === 'running' ? '' : '部分路線受阻，請查看各路線與來源狀態';
     state.stage = 'waiting';
   }
@@ -110,13 +116,12 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         state.lastPoll = [...sources.values()].map(value => value.lastPoll).filter(Boolean).sort().at(-1) || null;
         source.received = messages.length;
         source.decryptFailed = messages.filter(message => message.e2eeDecryptFailure && Number(message.createdTime || message.deliveredTime) >= oldest).length;
-        source.warning = source.decryptFailed ? '來源有文字無法解密，請確認 E2EE 金鑰' : '';
+        source.warning = source.decryptFailed ? '來源有文字無法解密，請確認 E2EE 金鑰' : health?.warning || '';
         source.retryAt = 0; source.consecutiveErrors = 0;
         const filtered = messages.filter(message => !outputs.has(`${adapters[source.endpoint.platform].identity}:${key}:${message.id}`));
         batches.set(key, filtered);
         for (const edge of live) {
           edge.status.lastRead = inspectRelayRead(filtered, edge.seen, edge.startedAt);
-          edge.status.pending = edge.status.lastRead.eligible;
         }
         if (!source.warning && live.some(edge => edge.status.lastRead.invalidTime > 0)) source.warning = '來源有訊息缺少有效時間，已略過；請回報此狀態供排查';
         if (!source.warning && live.some(edge => edge.status.lastRead.history > 0)) source.warning = '來源有未處理訊息早於啟動基準，已略過；請核對電腦日期與時間';
@@ -124,27 +129,49 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         if (!(error instanceof OperationTimeout)) source.pendingRead = null;
         source.failures++; source.consecutiveErrors = (source.consecutiveErrors || 0) + 1;
         source.retryAt = now() + Math.min(60000, 3000 * 2 ** Math.min(source.consecutiveErrors - 1, 5));
-        source.warning = error instanceof RelayError ? error.message : '讀取失敗或超過補讀上限；暫停發送並退避重試，請檢查登入與歷史訊息';
+        source.warning = error instanceof RelayError ? error.message : '讀取失敗或超過補讀上限；退避重試，已保存的待送訊息繼續處理，請檢查登入與歷史訊息';
       }
     }));
-    const destinations = new Map();
+    // Commit the payload before advancing the source checkpoint.
     for (const edge of edges.filter(edge => edge.status.phase === 'running' && batches.has(endpointKey(edge.source)))) {
+      try {
+        for (const message of unseenText(batches.get(endpointKey(edge.source)), edge.seen, edge.startedAt)) {
+          if (edge.pending.size >= queueLimit) break;
+          const id = String(message.id), text = matchingText(edge.rule, message);
+          if (text === null) {
+            await edge.record({ id, outcome: 'baseline' }); edge.seen.add(id); edge.status.skipped++; continue;
+          }
+          if (edge.destination.platform === 'telegram' && text.length > 4096) throw new RelayError('含前綴的文字超過 Telegram 4,096 字元上限；此路線已暫停');
+          await edge.record({ id, outcome: 'queued', text });
+          edge.pending.set(id, text); edge.seen.add(id);
+        }
+      } catch (error) {
+        edge.status.phase = 'failed'; edge.status.errors++;
+        edge.status.warning = error instanceof RelayError ? error.message : '待送訊息保存失敗，已暫停此路線';
+      }
+    }
+    const destinations = new Map();
+    for (const edge of edges.filter(edge => edge.status.phase === 'running')) {
       const key = endpointKey(edge.destination);
       if (!destinations.has(key)) destinations.set(key, []);
       destinations.get(key).push(edge);
     }
-    await Promise.all([...destinations.values()].map(async group => {
+    await Promise.all([...destinations.entries()].map(async ([destinationKey, group]) => {
       let attempted = false;
-      for (const edge of group) {
+      let cursor = cursors.get(destinationKey) || 0;
+      for (let count = 0; count < deliveryBudget; count++) {
+        let edge;
+        for (let scan = 0; scan < group.length; scan++) {
+          const candidate = group[cursor++ % group.length];
+          if (candidate.status.phase === 'running' && candidate.pending.size && !(cooldowns.get(candidate.destination.platform) > now())) { edge = candidate; break; }
+        }
+        if (!edge) break;
         const status = edge.status;
         try {
-          for (const message of unseenText(batches.get(endpointKey(edge.source)), edge.seen, edge.startedAt)) {
-            const id = String(message.id), text = matchingText(edge.rule, message);
-            if (text === null) {
-              await edge.record({ id, outcome: 'baseline' }); edge.seen.add(id); status.skipped++; status.pending--; continue;
-            }
-            if (edge.destination.platform === 'telegram' && text.length > 4096) throw new RelayError('含前綴的文字超過 Telegram 4,096 字元上限；此路線已暫停');
+          {
+            const [id, text] = edge.pending.entries().next().value;
             if (attempted) await pause(1100);
+            if (cooldowns.get(edge.destination.platform) > now()) break;
             status.stage = 'journal';
             await edge.record({ id, outcome: 'sending' }); edge.seen.add(id);
             status.stage = 'send';
@@ -154,6 +181,13 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
               result = await withDeadline(adapters[edge.destination.platform].send(edge.destination.id, text), operationTimeoutMs);
               if (!result?.id) throw new Error('Missing acknowledgement');
             } catch (error) {
+              if (edge.destination.platform === 'telegram' && error instanceof TelegramRateLimit) {
+                const retryAt = Math.max(cooldowns.get('telegram') || 0, now() + error.retryAfterMs);
+                await edge.record({ id, outcome: 'retry', retryAt });
+                cooldowns.set('telegram', retryAt);
+                status.stage = 'waiting';
+                break;
+              }
               status.uncertain++; status.stage = 'send_uncertain'; status.phase = 'blocked';
               status.warning = (error instanceof RelayError ? error.message + '；' : '') + '發送結果不明，已暫停此路線，請核對目的訊息；其他路線繼續。';
               await edge.record({ id, outcome: 'uncertain' });
@@ -163,7 +197,8 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             const key = `${adapters[edge.destination.platform].identity}:${endpointKey(edge.destination)}:${result.id}`;
             await appendRecord(outputFile, { key }); outputs.add(key);
             await edge.record({ id, outcome: 'sent' });
-            status.forwarded++; status.pending--; status.lastSend = new Date(now()).toISOString();
+            edge.pending.delete(id);
+            status.forwarded++; status.lastSend = new Date(now()).toISOString();
           }
           status.stage = 'waiting';
         } catch (error) {
@@ -174,7 +209,15 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
           }
         }
       }
+      cursors.set(destinationKey, cursor % group.length);
     }));
+    for (const edge of edges) {
+      if (!edge.pending) continue;
+      edge.status.pending = edge.pending.size;
+      if (edge.status.phase === 'running') edge.status.warning = cooldowns.get(edge.destination.platform) > now()
+        ? 'Telegram 限流中，待送訊息已保存，等待後自動重試' : edge.pending.size >= Math.ceil(queueLimit * 0.8)
+        ? `待送佇列接近容量（${edge.pending.size}/${queueLimit}）；未入列的訊息將於後續補讀` : '';
+    }
     refresh();
   }
   return { state, tick };
@@ -223,7 +266,7 @@ export async function runMultiRelay(state, directory, { createLineService }) {
           return inbox.messages(id);
         },
         async read(id) { if (pollError) throw new RelayError(pollError); return inbox.messages(id); },
-        health: () => ({ polls, lastPoll }),
+        health: () => ({ polls, lastPoll, ...inbox.health() }),
         send: (id, text) => client.send(id, text),
       };
       if (sourceIds.length) {
