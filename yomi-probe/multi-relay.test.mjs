@@ -225,8 +225,9 @@ test('sources sharing one destination send serially with spacing and a missing a
 test('a post-send journal failure preserves the sending checkpoint and cannot silently resend', async () => {
   const directory = await fixture(), line = adapter({ messages: [message('input'), message('second', 'later', 1200)] }), value = config(rule());
   const relay = await createMultiRelay({ config: value, adapters: { line }, directory, now: () => 1000, pause: async () => {} });
-  // A synthetic directory makes the output-journal append fail after acknowledgement.
-  await mkdir(path.join(directory, 'lineport-output.jsonl'));
+  // Inject the fault AFTER acknowledgement, so preflight cannot catch it.
+  const send = line.send;
+  line.send = async (...args) => { const result = await send(...args); await mkdir(path.join(directory, 'lineport-output.jsonl')); return result; };
   await relay.tick();
   assert.equal(line.calls.length, 1);
   assert.equal(relay.state.routes[0].phase, 'failed');

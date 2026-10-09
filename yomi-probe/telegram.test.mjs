@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, appendFile } from 'node:fs/promises';
+import { mkdtemp, appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createTelegramClient, createTelegramInbox, telegramMessage, TelegramRateLimit } from './telegram.mjs';
@@ -70,9 +70,10 @@ test('Telegram confirms offsets only after durable persistence and restores mess
 
 test('an inbox write failure never acknowledges an update on the next poll', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-inbox-failure-'));
-  // The parent does not exist. The first append fails before the offset can advance.
-  const offsets = [], client = { getUpdates: async offset => { offsets.push(offset); return [update(10)]; } };
-  const inbox = await createTelegramInbox(path.join(directory, 'missing', 'inbox.jsonl'), client, ['-123']);
+  // Corrupt the synthetic append target only after preflight, before the offset advances.
+  const file = path.join(directory, 'inbox.jsonl');
+  const offsets = [], client = { getUpdates: async offset => { offsets.push(offset); await mkdir(file); return [update(10)]; } };
+  const inbox = await createTelegramInbox(file, client, ['-123']);
   await assert.rejects(inbox.poll());
   await assert.rejects(inbox.poll());
   assert.deepEqual(offsets, [0]);

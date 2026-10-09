@@ -16,11 +16,15 @@ yomi-probe/node_modules/
 *.log
 LineCallYomiProbe/
 *credentials*
+!yomi-probe/bot-credentials.mjs
 *session-state*
 *e2ee-cache*
 relay-config*.json
 lineport-rules.json
 lineport-telegram.json
+lineport-discord.json
+lineport-*-protected.json
+lineport-private-archive-*/
 lineport-*.tmp
 lineport-settings*.json
 lineport-diagnostics*.json

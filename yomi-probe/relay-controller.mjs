@@ -26,7 +26,7 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
         if (state.lastRead) safe.lastRead = Object.fromEntries(['received', 'eligible', 'decryptFailed', 'invalidTime', 'history'].map(key => [key, Number.isSafeInteger(state.lastRead[key]) && state.lastRead[key] >= 0 ? state.lastRead[key] : 0]));
         safe.warning = relayWarning(safe);
         if (state.version === 3) {
-          const endpoint = value => ({ platform: value?.platform === 'telegram' ? 'telegram' : 'line', id: String(value?.id || '').slice(0, 100), name: String(value?.name || '').slice(0, 100) });
+          const endpoint = value => ({ platform: ['telegram', 'discord'].includes(value?.platform) ? value.platform : 'line', id: String(value?.id || '').slice(0, 100), name: String(value?.name || '').slice(0, 100) });
           const count = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
           safe.routes = Array.isArray(state.routes) ? state.routes.slice(0, 100).map(route => ({
             key: String(route.key || '').slice(0, 64), ruleId: String(route.ruleId || '').slice(0, 64), name: String(route.name || '').slice(0, 100),

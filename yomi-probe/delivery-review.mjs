@@ -3,11 +3,13 @@ import { readFile, readdir, lstat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { appendRecord, parseJournal } from './relay-core.mjs';
 import { HttpError } from './local-http.mjs';
+import { describePayload } from './media-payload.mjs';
+import { readJournalFile } from './storage-health.mjs';
 
 async function readOptional(file) {
   try {
     if (!(await lstat(file)).isFile()) throw new Error('Invalid journal file');
-    return await readFile(file, 'utf8');
+    return await readJournalFile(file);
   } catch (error) { if (error.code === 'ENOENT') return ''; throw error; }
 }
 export async function inspectDelivery(directory, identity) {
@@ -49,7 +51,7 @@ export function createDeliveryReviewStore(directory) {
         const match = /^lineport-route-([a-f0-9]{64})\.jsonl$/.exec(name);
         if (!match) continue;
         const result = await inspectDelivery(directory, match[1]);
-        for (const id of result.unresolved) items.push({ identity: result.identity, revision: result.revision, id, text: result.pending.get(id) || '', pending: result.pending.size, route: result.route });
+        for (const id of result.unresolved) items.push({ identity: result.identity, revision: result.revision, id, text: describePayload(result.pending.get(id) || ''), pending: result.pending.size, route: result.route });
       }
       return { items };
     },

@@ -10,12 +10,15 @@ import { createRelayController } from './relay-controller.mjs';
 import { RelayError } from './relay-health.mjs';
 import { normalizeConfig, configRevision, createSettingsStore } from './route-config.mjs';
 import { lineDirectory } from './line-directory.mjs';
-import { createTelegramClient } from './telegram.mjs';
+import { createTelegramClient, createTelegramInbox, telegramMessage } from './telegram.mjs';
 import { previewRules, settingsBackup, validateBackup, safeDiagnostics } from './user-tools.mjs';
 import { createDeliveryReviewStore } from './delivery-review.mjs';
+import { storageHealth, privateSnapshot } from './storage-health.mjs';
+import { recentSenders } from './source-senders.mjs';
+import { createDiscordClient, discordId } from './discord.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-export function createProbeServer({ service, runPwlessLogin, relayController, settingsStore, reviewStore, telegramFactory = createTelegramClient, port = 18765, token = randomBytes(32).toString('hex') }) {
+export function createProbeServer({ service, runPwlessLogin, relayController, settingsStore, reviewStore, dataDirectory, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, port = 18765, token = randomBytes(32).toString('hex') }) {
 service.on('error', () => {});
 const state = { phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
 let groups = new Map();
@@ -58,10 +61,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/api/relay/status') return send(res, 200, { ...(relayController ? await relayController.status() : { phase: 'unavailable' }), action: relayAction });
     if (req.method === 'GET' && req.url === '/api/rules' && settingsStore) {
       const config = await settingsStore.load();
-      return send(res, 200, { config, revision: configRevision(config), telegramConfigured: Boolean(await settingsStore.telegramToken()) });
+      return send(res, 200, { config, revision: configRevision(config), telegramConfigured: Boolean(await settingsStore.telegramToken()), telegramProtected: Boolean(await settingsStore.telegramProtected?.()), discordConfigured: Boolean(await settingsStore.discordToken?.()), discordProtected: Boolean(await settingsStore.discordProtected?.()) });
     }
     if (req.method === 'GET' && req.url === '/api/settings/backup' && settingsStore) return send(res, 200, settingsBackup(await settingsStore.load()));
     if (req.method === 'GET' && req.url === '/api/diagnostics') return send(res, 200, safeDiagnostics(relayController ? await relayController.status() : {}, state.connected));
+    if (req.method === 'GET' && req.url === '/api/storage' && dataDirectory) return send(res, 200, await storageHealth(dataDirectory));
     if (req.method === 'GET' && req.url === '/api/delivery/review' && reviewStore) {
       await requireStopped();
       return send(res, 200, await operation(() => reviewStore.list()));
@@ -72,6 +76,45 @@ const server = http.createServer(async (req, res) => {
     // Body streams can overlap. Recheck after awaiting the body, before starting work.
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
     if (req.url === '/api/rules/preview') return send(res, 200, previewRules(input));
+    if (req.url === '/api/storage/archive' && dataDirectory) {
+      await requireStopped();
+      return send(res, 200, await operation(async () => {
+        try { return await privateSnapshot(dataDirectory); }
+        catch (error) {
+          if (error instanceof RelayError) throw error;
+          throw new RelayError('私人封存未完成，原資料保留；請保留不完整封存並檢查磁碟空間與權限後重試');
+        }
+      }));
+    }
+    if (req.url === '/api/source/senders' && settingsStore) {
+      await requireStopped();
+      const result = await operation(async () => {
+        if (input.platform === 'line') {
+          if (!state.connected) throw new HttpError(401, '請先登入 LINE');
+          if (!(await lineDirectory(service)).some(endpoint => endpoint.id === input.id)) throw new HttpError(400, '來源不在目前 LINE 群組或好友列表');
+          const senders = recentSenders(await service.getRecentMessages(input.id, 50), 'line');
+          const contacts = senders.length ? await service.client.getContacts(senders.map(sender => sender.id)) : [];
+          return senders.map(sender => ({ ...sender, name: String(contacts.find(person => person.mid === sender.id)?.displayName || sender.id).slice(0, 100) }));
+        }
+        if (input.platform !== 'telegram' || typeof input.id !== 'string' || !/^-?[1-9]\d{0,15}$/.test(input.id) || !Number.isSafeInteger(Number(input.id))) throw new HttpError(400, '請選取有效來源');
+        const client = telegramFactory(await settingsStore.telegramToken());
+        await client.getChat(input.id);
+        const updates = await client.getUpdates(undefined, 0);
+        if (!Array.isArray(updates)) throw new RelayError('Telegram 未回傳有效更新；請稍後再載入發訊者');
+        let saved = [];
+        if (dataDirectory) {
+          const me = await client.getMe();
+          if (!Number.isSafeInteger(me?.id) || me.id <= 0) throw new RelayError('無法確認 Telegram Bot 身分；請重新連結');
+          const inbox = await createTelegramInbox(path.join(dataDirectory, `lineport-telegram-inbox-${me.id}.jsonl`), client, [input.id]);
+          saved = inbox.messages(input.id);
+        }
+        return recentSenders([...updates.map(update => {
+          const message = telegramMessage(update), raw = update.message || update.channel_post;
+          return message?.chatId === input.id ? { ...message, senderName: raw.sender_chat?.title || [raw.from?.first_name, raw.from?.last_name].filter(Boolean).join(' ') } : {};
+        }), ...saved.slice(-100).reverse()], 'telegram');
+      });
+      return send(res, 200, { senders: result, explanation: '只列最近可讀訊息的發訊者，不是完整成員列表；ID 維持穩定，名稱僅供辨認。匿名管理員只能辨識其代表的聊天室，無法識別個人。' });
+    }
     if (req.url === '/api/delivery/resolve' && reviewStore) {
       await requireStopped();
       return send(res, 200, await operation(() => reviewStore.resolve(input)));
@@ -94,6 +137,14 @@ const server = http.createServer(async (req, res) => {
               const unavailable = member && (['left', 'kicked'].includes(member.status) || member.status === 'restricted' && (!member.is_member || member.can_send_messages === false));
               checks.push({ platform: endpoint.name, message: chat.has_protected_content ? '受保護聊天室，不能作為轉送來源；請改選未受保護來源' : unavailable ? 'Bot 不在聊天室或禁止發送；此路線受阻，請加入 Bot 並調整權限' : chat.type === 'channel' && !(member?.status === 'creator' || member?.can_post_messages) ? '頻道發送權限不足；若作為目的，請授予 Bot 發布訊息權限' : '可存取；未發送測試訊息。私訊需先 Start，來源可讀範圍仍受 Privacy Mode 與平台限制' });
             } catch (error) { checks.push({ platform: endpoint.name, message: error instanceof RelayError ? error.message + '；請核對 ID、Bot 成員與權限' : '無法確認聊天室權限；請核對 ID 與網路後重試' }); }
+          }
+        }
+        if (endpoints.some(endpoint => endpoint.platform === 'discord')) {
+          const client = discordFactory(await settingsStore.discordToken());
+          await client.getMe();
+          for (const endpoint of new Map(endpoints.filter(endpoint => endpoint.platform === 'discord').map(endpoint => [endpoint.id, endpoint])).values()) {
+            try { await client.getChannel(endpoint.id); checks.push({ platform: endpoint.name, message: '可存取 Discord 一般文字目的頻道；未發訊。請確認 Bot 的查看頻道及發送訊息權限，此檢查不證明可發送或送達' }); }
+            catch (error) { checks.push({ platform: endpoint.name, message: error instanceof RelayError ? error.message : 'Discord 頻道權限無法確認；請檢查 Bot 成員及頻道設定' }); }
           }
         }
         if (!checks.length) checks.push({ platform: '設定', message: '請先保存並啟用至少一條規則，再檢查平台權限' });
@@ -127,12 +178,29 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.url === '/api/telegram/connect' && settingsStore) {
       await requireStopped();
+      if (input.protect !== undefined && typeof input.protect !== 'boolean') throw new HttpError(400, 'Token 保護選項格式不正確');
       const result = await operation(async () => {
         const client = telegramFactory(input.token), me = await client.getMe();
-        await settingsStore.saveTelegram(input.token);
+        await settingsStore.saveTelegram(input.token, input.protect === true);
         return { configured: true, name: String(me.username || me.first_name || 'Bot').slice(0, 100) };
       });
       return send(res, 200, result);
+    }
+    if (req.url === '/api/discord/connect' && settingsStore?.saveDiscord) {
+      await requireStopped();
+      if (input.protect !== undefined && typeof input.protect !== 'boolean') throw new HttpError(400, 'Token 保護選項格式不正確');
+      const result = await operation(async () => {
+        const me = await discordFactory(input.token).getMe();
+        await settingsStore.saveDiscord(input.token, input.protect === true);
+        return { configured: true, name: String(me.username || 'Bot').slice(0, 100) };
+      });
+      return send(res, 200, result);
+    }
+    if (req.url === '/api/discord/channel' && settingsStore?.discordToken) {
+      await requireStopped();
+      if (!discordId(input.id)) throw new HttpError(400, '請輸入有效的 Discord 頻道 ID');
+      const channel = await operation(async () => discordFactory(await settingsStore.discordToken()).getChannel(input.id));
+      return send(res, 200, { platform: 'discord', id: channel.id, name: String(channel.name || channel.id).slice(0, 100), kind: 'group' });
     }
     if (req.url === '/api/telegram/chat' && settingsStore) {
       await requireStopped();
@@ -165,6 +233,7 @@ const server = http.createServer(async (req, res) => {
       const endpoints = rules.flatMap(rule => [...rule.sources, ...rule.destinations]);
       if (endpoints.some(endpoint => endpoint.platform === 'line') && !state.connected) throw new HttpError(401, '請先登入 LINE');
       if (endpoints.some(endpoint => endpoint.platform === 'telegram') && !await settingsStore.telegramToken()) throw new HttpError(400, '請先連結 Telegram Bot');
+      if (endpoints.some(endpoint => endpoint.platform === 'discord') && !await settingsStore.discordToken?.()) throw new HttpError(400, '請先連結 Discord Bot');
       // Recheck after asynchronous configuration reads before acquiring the lock.
       if (state.busy) throw new HttpError(409, '前一個操作尚未完成');
       relayAction = 'starting';
@@ -262,7 +331,7 @@ const { LineClient } = await import('./node_modules/@rikaidev/yomi/dist/line/cli
 guardProtocol(LineClient);
 const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
 const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
-const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir) });
+const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
 server.listen(18765, '127.0.0.1', () => print('LinePort: http://127.0.0.1:18765/'));
 }

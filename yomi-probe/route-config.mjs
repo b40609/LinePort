@@ -2,6 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, open, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { HttpError } from './local-http.mjs';
+import { normalizeOptions, senderMatches, inSchedule } from './rule-options.mjs';
+import { mediaPayload } from './media-payload.mjs';
+import { RelayError } from './relay-health.mjs';
+import { discordId } from './discord.mjs';
+import { botCredentials } from './bot-credentials.mjs';
 
 const invalid = message => { throw new HttpError(400, message); };
 export const endpointKey = endpoint => `${endpoint.platform}:${endpoint.id}`;
@@ -10,8 +15,8 @@ export function normalizeConfig(input) {
   if (!input || input.version !== 1 || !Array.isArray(input.rules) || input.rules.length > 30) invalid('規則格式不正確，最多 30 條');
   const ruleIds = new Set(), edges = new Set(), graph = new Map();
   const endpoint = value => {
-    if (!value || !['line', 'telegram'].includes(value.platform) || typeof value.id !== 'string'
-      || !(value.platform === 'line' ? /^[ucr][a-zA-Z0-9_-]{1,80}$/ : /^-?[1-9]\d{0,15}$/).test(value.id)) invalid('聊天室 ID 格式不正確');
+    if (!value || !['line', 'telegram', 'discord'].includes(value.platform) || typeof value.id !== 'string'
+      || !(value.platform === 'discord' ? discordId(value.id) : (value.platform === 'line' ? /^[ucr][a-zA-Z0-9_-]{1,80}$/ : /^-?[1-9]\d{0,15}$/).test(value.id))) invalid('聊天室 ID 格式不正確');
     if (value.platform === 'telegram' && !Number.isSafeInteger(Number(value.id))) invalid('Telegram ID 超出範圍');
     return { platform: value.platform, id: value.id, name: typeof value.name === 'string' ? value.name.slice(0, 100) : value.id };
   };
@@ -27,6 +32,7 @@ export function normalizeConfig(input) {
     if (typeof value.enabled !== 'boolean' || !Array.isArray(value.sources) || !Array.isArray(value.destinations)
       || !value.sources.length || !value.destinations.length || value.sources.length > 10 || value.destinations.length > 10) invalid('每條規則需有 1–10 個來源與目的');
     const sources = value.sources.map(endpoint), destinations = value.destinations.map(endpoint);
+    if (sources.some(source => source.platform === 'discord')) invalid('Discord 目前只支援純文字目的頻道；來源請選 LINE 或 Telegram');
     if ([sources, destinations].some(rows => new Set(rows.map(endpointKey)).size !== rows.length)) invalid('同一規則不可重複選取聊天室');
     if (typeof value.prefix !== 'undefined' && (typeof value.prefix !== 'string' || value.prefix.length > 200)) invalid('訊息前綴最多 200 字');
     for (const source of sources) for (const destination of destinations) {
@@ -42,7 +48,7 @@ export function normalizeConfig(input) {
       }
     }
     return { id: value.id, name: typeof value.name === 'string' ? value.name.slice(0, 100) : value.id,
-      enabled: value.enabled, sources, destinations, include: keywords(value.include), exclude: keywords(value.exclude), prefix: value.prefix || '' };
+      enabled: value.enabled, sources, destinations, include: keywords(value.include), exclude: keywords(value.exclude), prefix: value.prefix || '', ...normalizeOptions(value, sources, destinations) };
   });
   const visiting = new Set(), visited = new Set();
   function visit(node) {
@@ -55,12 +61,29 @@ export function normalizeConfig(input) {
   for (const node of graph.keys()) visit(node);
   return { version: 1, rules };
 }
-export function matchingText(rule, message) {
-  if (message.protected || message.e2eeDecryptFailure || typeof message.text !== 'string' || !message.text.trim()) return null;
+export function textRejection(rule, message, sourceKey) {
+  if (!senderMatches(rule, sourceKey, message)) return '非指定發訊者；請核對此來源的人員 ID';
+  if (rule.schedule?.outside === 'skip' && !inSchedule(rule.schedule, Number(message.createdTime || message.deliveredTime))) return '訊息時間在時段外；此規則設定為略過';
+  if (message.protected) return '平台標示為受保護內容，不轉送';
+  if (message.e2eeDecryptFailure) return '無法解密原訊息，請先確認來源可正常讀取';
+  if (typeof message.text !== 'string' || !message.text.trim()) return '沒有可轉送的文字';
   const text = message.text.toLocaleLowerCase();
-  if (rule.include.length && !rule.include.some(word => text.includes(word.toLocaleLowerCase()))) return null;
-  if (rule.exclude.some(word => text.includes(word.toLocaleLowerCase()))) return null;
+  if (rule.include.length && !rule.include.some(word => text.includes(word.toLocaleLowerCase()))) return '沒有包含任一必要關鍵字；請核對 Call 訊格式';
+  if (rule.exclude.some(word => text.includes(word.toLocaleLowerCase()))) return '包含排除關鍵字；請核對是否誤排除有效 Call 訊';
+  return null;
+}
+export function matchingText(rule, message, sourceKey) {
+  if (textRejection(rule, message, sourceKey) !== null) return null;
   return rule.prefix + message.text;
+}
+export function matchingContent(rule, message, sourceKey) {
+  if (!message.media || !rule.media) return matchingText(rule, message, sourceKey);
+  if (message.protected || message.e2eeDecryptFailure || !senderMatches(rule, sourceKey, message)
+    || rule.schedule?.outside === 'skip' && !inSchedule(rule.schedule, Number(message.createdTime || message.deliveredTime))) return null;
+  const text = (message.text || '').toLocaleLowerCase();
+  if (rule.include.length && !rule.include.some(word => text.includes(word.toLocaleLowerCase())) || rule.exclude.some(word => text.includes(word.toLocaleLowerCase()))) return null;
+  try { return mediaPayload({ ...message.media, caption: rule.prefix + (message.text || '') }); }
+  catch { throw new RelayError('圖片／檔案格式、大小或說明不符限制，已暫停此路線；請核對 10／50 MB 大小及 1,024 字元說明，保留原訊息後調整規則'); }
 }
 export async function atomicJson(file, value) {
   // Retain the previous file if the write fails; never truncate an active configuration.
@@ -70,9 +93,10 @@ export async function atomicJson(file, value) {
   finally { await handle.close(); }
   await rename(temporary, file);
 }
-export function createSettingsStore(directory) {
+export function createSettingsStore(directory, protectionOptions) {
   const configFile = path.join(directory, 'lineport-rules.json');
-  const telegramFile = path.join(directory, 'lineport-telegram.json');
+  const telegram = botCredentials(directory, 'telegram', atomicJson, protectionOptions);
+  const discord = botCredentials(directory, 'discord', atomicJson, protectionOptions);
   return {
     async load() {
       try { return normalizeConfig(JSON.parse(await readFile(configFile, 'utf8'))); }
@@ -89,10 +113,11 @@ export function createSettingsStore(directory) {
       } catch { throw new HttpError(409, '設定還原未完成；未取代原設定，請保留已產生的備份並檢查磁碟空間與權限後重試'); }
       return { config: normalized, backup };
     },
-    async telegramToken() {
-      try { return JSON.parse(await readFile(telegramFile, 'utf8')).token || ''; }
-      catch (error) { if (error.code === 'ENOENT') return process.env.LINEPORT_TELEGRAM_TOKEN || ''; throw error; }
-    },
-    async saveTelegram(token) { await atomicJson(telegramFile, { token }); },
+    telegramToken: () => telegram.token(),
+    saveTelegram: (token, useProtection = false) => telegram.save(token, useProtection),
+    telegramProtected: () => telegram.protected(),
+    discordToken: () => discord.token(),
+    saveDiscord: (token, useProtection = false) => discord.save(token, useProtection),
+    discordProtected: () => discord.protected(),
   };
 }

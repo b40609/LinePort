@@ -1,14 +1,16 @@
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { appendRecord, loadJournal, establishBaseline } from './relay-core.mjs';
 import { unseenText } from './relay-rules.mjs';
-import { createSettingsStore, configRevision, endpointKey, matchingText } from './route-config.mjs';
+import { createSettingsStore, configRevision, endpointKey, matchingContent } from './route-config.mjs';
 import { lineDirectory, readLineSince } from './line-directory.mjs';
 import { requireRelayEncryption, inspectRelayRead, RelayError } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
 import { createTelegramClient, createTelegramInbox, TelegramRateLimit } from './telegram.mjs';
+import { createDiscordClient, DiscordRateLimit } from './discord.mjs';
 import { inspectDelivery } from './delivery-review.mjs';
+import { inSchedule } from './rule-options.mjs';
+import { readJournalFile, storageHealth } from './storage-health.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -23,15 +25,17 @@ async function withDeadline(operation, timeoutMs) {
 }
 async function rowsFrom(file) {
   try {
-    const text = await readFile(file, 'utf8');
+    const text = await readJournalFile(file);
     if (text && !text.endsWith('\n')) throw new Error('Incomplete journal');
     return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
   } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
-export async function createMultiRelay({ config, adapters, platformErrors = {}, directory, now = Date.now, pause = sleep, operationTimeoutMs = 30000, queueLimit = 1000, deliveryBudget = 10 }) {
+export async function createMultiRelay({ config, adapters, platformErrors = {}, directory, now = Date.now, pause = sleep, operationTimeoutMs = 30000, queueLimit = 1000, deliveryBudget = 10, writeRecord = appendRecord }) {
   if (!Number.isSafeInteger(queueLimit) || queueLimit < 1 || !Number.isSafeInteger(deliveryBudget) || deliveryBudget < 1) throw new Error('Invalid queue limits');
   const cursors = new Map();
   const cooldowns = new Map();
+  const reading = new Set(), delivering = new Set();
+  const attemptedDestinations = new Set();
   const outputFile = path.join(directory, 'lineport-output.jsonl');
   const outputs = new Set();
   for (const row of await rowsFrom(outputFile)) {
@@ -54,7 +58,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       if (!from || !to) throw new RelayError(platformErrors[!from ? source.platform : destination.platform] || '此平台尚未連結，請先設定帳號');
       const identity = digest([rule.id, from.identity, sourceKey, to.identity, destinationKey]);
       edge.file = path.join(directory, `lineport-route-${identity}.jsonl`);
-      edge.record = row => appendRecord(edge.file, row);
+      edge.record = row => writeRecord(edge.file, row);
       const saved = await loadJournal(edge.file);
       if (saved.routeIdentity && saved.routeIdentity !== identity) throw new Error('Invalid identity');
       edge.seen = saved.seen;
@@ -96,11 +100,19 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     state.stage = 'waiting';
   }
   refresh();
-  async function tick() {
+  async function tick({ sourceKeys = [...sources.keys()], deliver = true } = {}) {
+    let capacity;
+    try { capacity = await storageHealth(directory); }
+    catch { capacity = { blocked: true, warning: '本機容量或紀錄狀態無法確認；已停止相關路線，請保留原檔並檢查磁碟與權限' }; }
+    if (capacity.blocked) {
+      for (const edge of edges.filter(edge => edge.status.phase === 'running')) { edge.status.phase = 'failed'; edge.status.errors++; edge.status.warning = capacity.warning; }
+      refresh(); return;
+    }
     const batches = new Map();
     await Promise.all([...sources.entries()].map(async ([key, source]) => {
       const live = source.edges.filter(edge => edge.status.phase === 'running');
-      if (!live.length || source.retryAt > now()) return;
+      if (!sourceKeys.includes(key) || !live.length || source.retryAt > now() || reading.has(key)) return;
+      reading.add(key);
       try {
         const oldest = Math.min(...live.map(edge => edge.startedAt));
         // Only stop paging at a checkpoint shared by EVERY active destination.
@@ -130,19 +142,20 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         source.failures++; source.consecutiveErrors = (source.consecutiveErrors || 0) + 1;
         source.retryAt = now() + Math.min(60000, 3000 * 2 ** Math.min(source.consecutiveErrors - 1, 5));
         source.warning = error instanceof RelayError ? error.message : '讀取失敗或超過補讀上限；退避重試，已保存的待送訊息繼續處理，請檢查登入與歷史訊息';
-      }
+      } finally { reading.delete(key); }
     }));
     // Commit the payload before advancing the source checkpoint.
     for (const edge of edges.filter(edge => edge.status.phase === 'running' && batches.has(endpointKey(edge.source)))) {
       try {
-        for (const message of unseenText(batches.get(endpointKey(edge.source)), edge.seen, edge.startedAt)) {
+        for (const message of unseenText(batches.get(endpointKey(edge.source)), edge.seen, edge.startedAt, edge.rule.media)) {
           if (edge.pending.size >= queueLimit) break;
-          const id = String(message.id), text = matchingText(edge.rule, message);
+          const id = String(message.id), text = matchingContent(edge.rule, message, endpointKey(edge.source));
           if (text === null) {
             await edge.record({ id, outcome: 'baseline' }); edge.seen.add(id); edge.status.skipped++; continue;
           }
-          if (edge.destination.platform === 'telegram' && text.length > 4096) throw new RelayError('含前綴的文字超過 Telegram 4,096 字元上限；此路線已暫停');
-          await edge.record({ id, outcome: 'queued', text });
+          if (edge.destination.platform === 'telegram' && typeof text === 'string' && text.length > 4096) throw new RelayError('含前綴的文字超過 Telegram 4,096 字元上限；此路線已暫停');
+          if (edge.destination.platform === 'discord' && (typeof text !== 'string' || text.length > 2000)) throw new RelayError('含前綴的文字超過 Discord 2,000 字元上限，已暫停此路線；請縮短內容或改選目的');
+          await edge.record(typeof text === 'string' ? { id, outcome: 'queued', text } : { id, outcome: 'media_queued', payloadVersion: 1, payload: text });
           edge.pending.set(id, text); edge.seen.add(id);
         }
       } catch (error) {
@@ -157,13 +170,16 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       destinations.get(key).push(edge);
     }
     await Promise.all([...destinations.entries()].map(async ([destinationKey, group]) => {
-      let attempted = false;
+      if (!deliver || delivering.has(destinationKey)) return;
+      delivering.add(destinationKey);
+      try {
+      let attempted = attemptedDestinations.has(destinationKey);
       let cursor = cursors.get(destinationKey) || 0;
       for (let count = 0; count < deliveryBudget; count++) {
         let edge;
         for (let scan = 0; scan < group.length; scan++) {
           const candidate = group[cursor++ % group.length];
-          if (candidate.status.phase === 'running' && candidate.pending.size && !(cooldowns.get(candidate.destination.platform) > now())) { edge = candidate; break; }
+          if (candidate.status.phase === 'running' && candidate.pending.size && inSchedule(candidate.rule.schedule, now()) && !(cooldowns.get(candidate.destination.platform) > now())) { edge = candidate; break; }
         }
         if (!edge) break;
         const status = edge.status;
@@ -171,20 +187,21 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
           {
             const [id, text] = edge.pending.entries().next().value;
             if (attempted) await pause(1100);
-            if (cooldowns.get(edge.destination.platform) > now()) break;
+            if (cooldowns.get(edge.destination.platform) > now() || !inSchedule(edge.rule.schedule, now())) break;
             status.stage = 'journal';
             await edge.record({ id, outcome: 'sending' }); edge.seen.add(id);
             status.stage = 'send';
             let result;
             try {
               attempted = true;
+              attemptedDestinations.add(destinationKey);
               result = await withDeadline(adapters[edge.destination.platform].send(edge.destination.id, text), operationTimeoutMs);
               if (!result?.id) throw new Error('Missing acknowledgement');
             } catch (error) {
-              if (edge.destination.platform === 'telegram' && error instanceof TelegramRateLimit) {
-                const retryAt = Math.max(cooldowns.get('telegram') || 0, now() + error.retryAfterMs);
+              if (edge.destination.platform === 'telegram' && error instanceof TelegramRateLimit || edge.destination.platform === 'discord' && error instanceof DiscordRateLimit) {
+                const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + error.retryAfterMs);
                 await edge.record({ id, outcome: 'retry', retryAt });
-                cooldowns.set('telegram', retryAt);
+                cooldowns.set(edge.destination.platform, retryAt);
                 status.stage = 'waiting';
                 break;
               }
@@ -195,7 +212,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             }
             status.stage = 'journal';
             const key = `${adapters[edge.destination.platform].identity}:${endpointKey(edge.destination)}:${result.id}`;
-            await appendRecord(outputFile, { key }); outputs.add(key);
+            await writeRecord(outputFile, { key }); outputs.add(key);
             await edge.record({ id, outcome: 'sent' });
             edge.pending.delete(id);
             status.forwarded++; status.lastSend = new Date(now()).toISOString();
@@ -210,18 +227,19 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         }
       }
       cursors.set(destinationKey, cursor % group.length);
+      } finally { delivering.delete(destinationKey); }
     }));
     for (const edge of edges) {
       if (!edge.pending) continue;
       edge.status.pending = edge.pending.size;
       edge.status.retryAt = cooldowns.get(edge.destination.platform) > now() ? cooldowns.get(edge.destination.platform) : 0;
       if (edge.status.phase === 'running') edge.status.warning = cooldowns.get(edge.destination.platform) > now()
-        ? 'Telegram 限流中，待送訊息已保存，等待後自動重試' : edge.pending.size >= Math.ceil(queueLimit * 0.8)
-        ? `待送佇列接近容量（${edge.pending.size}/${queueLimit}）；未入列的訊息將於後續補讀` : '';
+        ? `${edge.destination.platform === 'discord' ? 'Discord' : 'Telegram'} 限流中，待送訊息已保存，等待後自動重試` : edge.pending.size && !inSchedule(edge.rule.schedule, now()) ? '時段外，已保留待送；進入時段後自動處理' : edge.pending.size >= Math.ceil(queueLimit * 0.8)
+        ? `待送佇列接近容量（${edge.pending.size}/${queueLimit}）；未入列的訊息將於後續補讀` : capacity.warning;
     }
     refresh();
   }
-  return { state, tick };
+  return { state, tick, sourceKeys: [...sources.keys()] };
 }
 
 export async function runMultiRelay(state, directory, { createLineService }) {
@@ -229,6 +247,12 @@ export async function runMultiRelay(state, directory, { createLineService }) {
   if (configRevision(config) !== process.env.LINEPORT_CONFIG_REVISION) throw new RelayError('規則已變動，請停止後重新啟動');
   const endpoints = config.rules.filter(rule => rule.enabled).flatMap(rule => [...rule.sources, ...rule.destinations]);
   const adapters = {}, platformErrors = {};
+  if (endpoints.some(endpoint => endpoint.platform === 'discord')) {
+    try {
+      const client = createDiscordClient(await store.discordToken()), me = await client.getMe();
+      adapters.discord = { identity: `discord:${me.id}`, prepare: id => client.getChannel(id), send: (id, text) => client.send(id, text) };
+    } catch (error) { platformErrors.discord = error instanceof RelayError ? error.message : 'Discord 連結失敗；請檢查 Bot 與目的頻道權限'; }
+  }
   if (endpoints.some(endpoint => endpoint.platform === 'line')) {
     try {
       const service = await createLineService();
@@ -282,10 +306,12 @@ export async function runMultiRelay(state, directory, { createLineService }) {
   }
   const relay = await createMultiRelay({ config, adapters, platformErrors, directory });
   Object.assign(state, relay.state);
-  async function poll() {
-    try { await relay.tick(); Object.assign(state, relay.state); }
+  async function poll(sourceKeys) {
+    try { await relay.tick({ sourceKeys }); Object.assign(state, relay.state); }
     catch { state.phase = 'failed'; state.stage = 'journal'; state.errors++; return; }
-    setTimeout(poll, 3000);
+    setTimeout(() => void poll(sourceKeys), 3000);
   }
-  void poll();
+  for (const key of relay.sourceKeys) void poll([key]);
+  // Recover persisted queues even while every source is offline.
+  void poll([]);
 }
