@@ -87,6 +87,68 @@ test('three sender sources fan out to four mixed destinations and restart preser
   assert.ok(restarted.state.routes.every(route => route.pending === 0 && route.uncertain === 0));
 });
 
+test('sender and exclusion filters survive a stopped interval and restart across mixed destinations', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-filter-restart-'));
+  const deliveries = [], messages = new Map();
+  const settings = normalizeConfig({ version: 1, rules: sources.map((source, index) => ({
+    id: 'notice-' + index, name: '通知 ' + index, enabled: true, sources: [source], destinations,
+    senderAllowlist: { [source.platform + ':' + source.id]: [source.platform === 'line' ? 'usender1' : '123'] },
+    include: ['通知'], exclude: ['忽略'], prefix: '[來源' + index + '] ',
+  })) });
+  const allowed = source => source.platform === 'line' ? 'usender1' : '123';
+  const other = source => source.platform === 'line' ? 'ubystander' : '456';
+  const key = source => source.platform + ':' + source.id;
+  const row = (source, id, from, text, createdTime) => ({ id: key(source) + ':' + id, from, text, createdTime });
+  for (const source of sources) messages.set(key(source), [
+    row(source, 'first', allowed(source), '通知 A', 1100),
+    row(source, 'same-text-new-id', allowed(source), '通知 A', 1101),
+    row(source, 'excluded', allowed(source), '通知 A 忽略', 1102),
+    row(source, 'bystander', other(source), '通知 A', 1103),
+    row(source, 'greeting', allowed(source), '你好，謝謝', 1104),
+  ]);
+  const adapter = platform => ({
+    identity: 'synthetic-' + platform, prepare: async () => {}, recent: async () => [],
+    read: async id => messages.get(platform + ':' + id) || [],
+    send: async (id, text) => {
+      deliveries.push({ platform, id, text });
+      return { id: 'synthetic-ack-' + deliveries.length };
+    },
+  });
+  let clock = 1000;
+  const options = { config: settings, adapters: { line: adapter('line'), telegram: adapter('telegram') },
+    directory, now: () => clock, pause: async () => {}, deliveryBudget: 40 };
+  const started = await createMultiRelay(options);
+  clock = 1200;
+  await started.tick();
+  assert.equal(started.state.routes.length, 12);
+  assert.equal(deliveries.length, 24);
+  assert.ok(started.state.routes.every(route => route.skipped === 3 && route.pending === 0));
+
+  // Simulate stopping the worker: new source messages arrive without another tick.
+  for (const source of sources) messages.get(key(source)).push(
+    row(source, 'while-stopped', allowed(source), '通知 B', 2100),
+    row(source, 'excluded-while-stopped', allowed(source), '通知 B 忽略', 2101),
+  );
+  clock = 2200;
+  const restarted = await createMultiRelay(options);
+  await restarted.tick();
+  assert.equal(deliveries.length, 36);
+  await restarted.tick();
+  assert.equal(deliveries.length, 36);
+  for (const destination of destinations) {
+    const received = deliveries.filter(item => item.platform === destination.platform && item.id === destination.id);
+    assert.equal(received.length, 9);
+    for (let index = 0; index < sources.length; index++) {
+      const matching = received.filter(item => item.text.startsWith('[來源' + index + '] '));
+      assert.deepEqual(matching.map(item => item.text), [
+        '[來源' + index + '] 通知 A', '[來源' + index + '] 通知 A', '[來源' + index + '] 通知 B',
+      ]);
+    }
+    assert.ok(received.every(item => !item.text.includes('忽略') && !item.text.includes('你好')));
+  }
+  assert.ok(restarted.state.routes.every(route => route.skipped === 1 && route.pending === 0 && route.uncertain === 0));
+});
+
 test('mixed destinations preview explicitly reports caption only and rejects media enablement', () => {
   const config = value();
   const result = previewRules({ config, source: 'telegram:-1001', sender: '123', text: '公告 100',
