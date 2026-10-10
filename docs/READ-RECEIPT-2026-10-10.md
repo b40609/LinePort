@@ -49,10 +49,3 @@
 - **產品承諾**：本次未觀察到自動已讀，不承諾永遠不已讀，也不表示平台或其他成員無法得知轉送。官方 LINE 開啟來源仍會產生正常已讀。
 
 其他路線與可靠性驗收見 [真實平台驗收表](LIVE-ACCEPTANCE.md)，帳號與資料限制見 [安全說明](../SECURITY.md)。
-
-## 文件方法參考
-
-參考下列成熟開源專案的官方文件結構，採用版本／環境、重現步驟、預期與實際行為、紀錄與隱私界線；本文測試設計、數據與結論屬 LinePort，並非這些專案的測試或背書。查閱日期：2026-10-10，未複製程式碼或整段文案。
-
-- [Syncthing 問題回報範本](https://github.com/syncthing/syncthing/blob/main/.github/ISSUE_TEMPLATE/02-bug.yml)：要求實際行為、預期／重現方式、版本、平台及相關紀錄。
-- [Synapse 問題回報範本](https://github.com/matrix-org/synapse/blob/develop/.github/ISSUE_TEMPLATE/BUG_REPORT.yml)：分列重現步驟、版本、安裝環境、設定與紀錄，提醒移除私人資料。
