@@ -27,9 +27,13 @@ export async function lineSourceSenders(service, chatId) {
   const names = new Map();
   for (let start = 0; start < ids.length; start += 100) {
     const contacts = await service.client.getContacts(ids.slice(start, start + 100));
-    for (const contact of contacts) names.set(contact.mid, String(contact.displayName || contact.mid).slice(0, 100));
+    for (const contact of contacts) {
+      const originalName = String(contact.displayName || contact.mid).slice(0, 100);
+      const customName = typeof contact.displayNameOverridden === 'string' ? contact.displayNameOverridden.trim().slice(0, 100) : '';
+      names.set(contact.mid, { name: customName || originalName, ...(customName && customName !== originalName ? { originalName } : {}) });
+    }
   }
-  return { senders: ids.map(id => ({ id, name: names.get(id) || id })), listing,
+  return { senders: ids.map(id => ({ id, ...(names.get(id) || { name: id }) })), listing,
     explanation: listing === 'members' ? 'LINE 回傳的已加入成員清單，包含尚未發言的人；不包含受邀未加入者。固定 ID 不受改名影響。勾選後加入，留空代表不限制人員。'
       : listing === 'person' ? '此來源為個人聊天室。使用固定 ID，名稱僅供辨認。'
       : 'LINE 未提供成員清單，改列最近可讀訊息的發訊者；尚未發言的人可能未列出，可手動輸入固定 ID。' };

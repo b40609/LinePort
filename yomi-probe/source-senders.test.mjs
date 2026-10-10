@@ -10,6 +10,14 @@ function service(members) {
       markChatRead: () => { throw new Error('Read receipt forbidden'); }, sendChatChecked: () => { throw new Error('Read receipt forbidden'); } } };
 }
 
+test('LINE private contact name takes precedence while retaining original name', async () => {
+  const fake = service(null);
+  fake.client.getContacts = async ids => ids.map(mid => ({ mid, displayName: 'Original', displayNameOverridden: ' My alias ' }));
+  assert.deepEqual((await lineSourceSenders(fake, 'uperson')).senders, [{ id: 'uperson', name: 'My alias', originalName: 'Original' }]);
+  fake.client.getContacts = async ids => ids.map(mid => ({ mid, displayName: 'Original', displayNameOverridden: ' ' }));
+  assert.deepEqual((await lineSourceSenders(fake, 'uperson')).senders, [{ id: 'uperson', name: 'Original' }]);
+});
+
 test('membership includes silent members and excludes invitations and invalid identities without reading messages', async () => {
   const members = Object.fromEntries(Array.from({ length: 17 }, (_, i) => ['umember' + i, 1]));
   const fake = service({ 1: { 4: { ...members, invalid: 1 }, 5: { uinvited: 1 } } });

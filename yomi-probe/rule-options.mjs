@@ -11,6 +11,19 @@ export function normalizeOptions(rule, sources, destinations) {
       if (ids.length) senderAllowlist[source] = [...new Set(ids)];
     }
   }
+  const senderAliases = {};
+  if (rule.senderAliases !== undefined) {
+    if (!rule.senderAliases || typeof rule.senderAliases !== 'object' || Array.isArray(rule.senderAliases)) invalid('本機別名格式不正確');
+    for (const [source, aliases] of Object.entries(rule.senderAliases)) {
+      const endpoint = sources.find(value => `${value.platform}:${value.id}` === source);
+      if (!endpoint || !aliases || typeof aliases !== 'object' || Array.isArray(aliases) || Object.keys(aliases).length > 20) invalid('每個來源最多保存 20 個本機別名');
+      const entries = Object.entries(aliases);
+      for (const [id, name] of entries) {
+        if (!(endpoint.platform === 'line' ? /^u[a-zA-Z0-9_-]{1,80}$/ : /^(?:chat:)?-?[1-9]\d{0,15}$/).test(id) || typeof name !== 'string' || !name.trim() || name.length > 100 || /[\x00-\x1f\x7f]/.test(name)) invalid('本機別名需有效人員 ID 與 1–100 字名稱');
+      }
+      if (entries.length) senderAliases[source] = Object.fromEntries(entries.map(([id, name]) => [id, name.trim()]));
+    }
+  }
   let schedule = null;
   if (rule.schedule != null) {
     const value = rule.schedule;
@@ -22,7 +35,7 @@ export function normalizeOptions(rule, sources, destinations) {
   if (rule.media && (sources.some(value => value.platform !== 'telegram') || destinations.some(value => !['telegram', 'line'].includes(value.platform)))) invalid('附件需使用 Telegram 來源；可送往 Telegram，圖片另可送往 LINE。LINE 來源與 Discord 媒體尚未支援');
   if (rule.media && rule.replies && destinations.some(value => value.platform === 'line')) invalid('Telegram → LINE 圖片目前不能保留回覆關聯，請關閉回覆或拆分規則');
   if (rule.replies !== undefined && typeof rule.replies !== 'boolean') invalid('回覆關聯設定需為開啟或關閉');
-  return { senderAllowlist, schedule, media: rule.media === true, replies: rule.replies === true };
+  return { senderAllowlist, ...(Object.keys(senderAliases).length ? { senderAliases } : {}), schedule, media: rule.media === true, replies: rule.replies === true };
 }
 export function inSchedule(schedule, timestamp) {
   if (!schedule) return true;
