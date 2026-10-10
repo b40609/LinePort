@@ -113,3 +113,54 @@ test('checkbox selection exceeding the fixed-ID limit keeps all existing choices
   assert.equal(ui.nodes.get('senderIds').value.split('\n').length, 20);
   assert.equal(ui.run('editorOptions().senderAllowlist["line:csource"].length'), 20);
 });
+
+test('single source closes the picker and another source retains independent fixed IDs', async () => {
+  const ui = await editor();
+  ui.run('resetEditor();selectSource("line:csource");');
+  assert.equal(ui.run('selected("source").length'), 1);
+  assert.equal(ui.run('sourcePickerOpen'), false);
+  ui.nodes.get('senderIds').value = 'first-fixed';
+  ui.nodes.get('senderIds').oninput();
+  ui.run('selectSource("line:cother")');
+  assert.equal(ui.run('selected("source").length'), 2);
+  assert.equal(ui.nodes.get('senderIds').value, '');
+  ui.nodes.get('senderIds').value = 'second-fixed';
+  ui.nodes.get('senderIds').oninput();
+  assert.equal(ui.run('editorOptions().senderAllowlist["line:csource"][0]'), 'first-fixed');
+  assert.equal(ui.run('editorOptions().senderAllowlist["line:cother"][0]'), 'second-fixed');
+  ui.run('loadEditorOptions({senderAllowlist:{"line:csource":["first-fixed"],"line:cother":["second-fixed"]}})');
+  assert.equal(ui.run('selected("source").length'), 2);
+  assert.equal(ui.run('senderModes["line:cother"]'), 'specific');
+});
+
+test('removing the final specified member blocks saving until all senders is explicitly selected', async () => {
+  const ui = await editor();
+  await ui.nodes.get('loadSenders').onclick();
+  const checkbox = ui.nodes.get('recentSenders').children[0].children[0].children[0];
+  checkbox.checked = true; checkbox.onchange();
+  checkbox.checked = false; checkbox.onchange();
+  await ui.nodes.get('saveRule').onclick();
+  assert.equal(ui.saved(), undefined);
+  assert.match(ui.nodes.get('notice').textContent, /至少選擇一名指定成員/);
+  ui.nodes.get('senderMode').value = 'all'; ui.nodes.get('senderMode').onchange();
+  await ui.nodes.get('saveRule').onclick();
+  assert.equal(Object.keys(ui.saved().rules[0].senderAllowlist).length, 0);
+});
+
+test('all senders omits fixed IDs in payload but switching back retains the draft selection', async () => {
+  const ui = await editor();
+  ui.nodes.get('senderIds').value = 'fixed-member'; ui.nodes.get('senderIds').oninput();
+  ui.nodes.get('senderMode').value = 'all'; ui.nodes.get('senderMode').onchange();
+  assert.equal(ui.run('editorOptions().senderAllowlist["line:csource"].length'), 0);
+  ui.nodes.get('senderMode').value = 'specific'; ui.nodes.get('senderMode').onchange();
+  assert.equal(ui.run('editorOptions().senderAllowlist["line:csource"][0]'), 'fixed-member');
+  ui.run('selectSource("line:cother");senderModes["line:csource"]="specific";senderAllowlist["line:csource"]=[];');
+  assert.throws(() => ui.run('validateDraft(false)'), /至少選擇一名指定成員/);
+});
+
+test('saved endpoints preserve directory kinds and unknown kinds are not guessed from IDs', async () => {
+  const ui = await editor();
+  ui.run('addEndpoints([{platform:"line",id:"csource",name:"Source",kind:"group"}]);addEndpoints([{platform:"line",id:"csource",name:"Renamed"}]);');
+  assert.equal(ui.run('endpointKind(endpoints.find(endpoint=>endpoint.id==="csource"))'), 'group');
+  assert.equal(ui.run('endpointKind({platform:"line",id:"uguessed",name:"Group"})'), 'unknown');
+});
