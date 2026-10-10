@@ -81,3 +81,35 @@ test('switching sources and reloading preserves uncommitted aliases per source',
   ui.run("loadEditorOptions({senderAllowlist:{}})");
   assert.equal(ui.run('Object.keys(senderAliases).length'), 0);
 });
+
+test('checkbox changes save fixed IDs immediately and preserve members absent from the visible list', async () => {
+  const ui = await editor();
+  ui.nodes.get('senderIds').value = 'unseen-member';
+  await ui.nodes.get('loadSenders').onclick();
+  const checkbox = ui.nodes.get('recentSenders').children[0].children[0].children[0];
+  checkbox.checked = true;
+  checkbox.onchange();
+  await ui.nodes.get('saveRule').onclick();
+  assert.deepEqual(ui.saved().rules[0].senderAllowlist['line:csource'], ['unseen-member', 'uone']);
+  ui.run("editingId=config.rules[0].id;for(const option of $('source').options)option.selected=option.value==='line:csource';for(const option of $('destination').options)option.selected=option.value==='line:cdest';loadEditorOptions(config.rules[0]);");
+  await ui.nodes.get('loadSenders').onclick();
+  const restored = ui.nodes.get('recentSenders').children[0].children[0].children[0];
+  assert.equal(restored.checked, true);
+  restored.checked = false;
+  restored.onchange();
+  await ui.nodes.get('saveRule').onclick();
+  assert.deepEqual(ui.saved().rules[0].senderAllowlist['line:csource'], ['unseen-member']);
+});
+
+test('checkbox selection exceeding the fixed-ID limit keeps all existing choices', async () => {
+  const ui = await editor();
+  ui.nodes.get('senderIds').value = Array.from({ length: 20 }, (_, i) => 'saved-' + i).join('\n');
+  await ui.nodes.get('loadSenders').onclick();
+  const checkbox = ui.nodes.get('recentSenders').children[0].children[0].children[0];
+  checkbox.checked = true;
+  checkbox.onchange();
+  assert.equal(checkbox.checked, false);
+  assert.match(ui.nodes.get('notice').textContent, /最多指定 20 人/);
+  assert.equal(ui.nodes.get('senderIds').value.split('\n').length, 20);
+  assert.equal(ui.run('editorOptions().senderAllowlist["line:csource"].length'), 20);
+});
