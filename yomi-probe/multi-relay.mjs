@@ -2,7 +2,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { appendRecord, loadJournal, establishBaseline } from './relay-core.mjs';
 import { unseenText } from './relay-rules.mjs';
-import { createSettingsStore, configRevision, endpointKey, matchingContent } from './route-config.mjs';
+import { createSettingsStore, configRevision, endpointKey, matchingContent, textRejection } from './route-config.mjs';
 import { lineDirectory, readLineSince } from './line-directory.mjs';
 import { requireRelayEncryption, inspectRelayRead, RelayError } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
@@ -137,7 +137,10 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         const filtered = messages.filter(message => !outputs.has(`${adapters[source.endpoint.platform].identity}:${key}:${message.id}`));
         batches.set(key, filtered);
         for (const edge of live) {
-          edge.status.lastRead = inspectRelayRead(filtered, edge.seen, edge.startedAt);
+          edge.status.lastRead = inspectRelayRead(filtered, edge.seen, edge.startedAt, edge.rule.media);
+          const candidates = unseenText(filtered, edge.seen, edge.startedAt, edge.rule.media);
+          edge.status.lastRead.matched = candidates.filter(message => textRejection(edge.rule, message, key, Boolean(edge.rule.media && message.media)) === null).length;
+          edge.status.lastRead.filtered = candidates.length - edge.status.lastRead.matched;
         }
         if (!source.warning && live.some(edge => edge.status.lastRead.invalidTime > 0)) source.warning = '來源有訊息缺少有效時間，已略過；請回報此狀態供排查';
         if (!source.warning && live.some(edge => edge.status.lastRead.history > 0)) source.warning = '來源有未處理訊息早於啟動基準，已略過；請核對電腦日期與時間';

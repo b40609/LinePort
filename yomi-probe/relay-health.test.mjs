@@ -15,7 +15,7 @@ test('running relay exposes silently skipped new encrypted messages', () => {
     { id: 'ready', createdTime: 120, text: 'readable' },
     { id: 'invalid', createdTime: 0, text: 'bad time' },
   ], new Set(['baseline']), 100);
-  assert.deepEqual(lastRead, { received: 5, eligible: 1, decryptFailed: 1, invalidTime: 1, history: 1 });
+  assert.deepEqual(lastRead, { received: 5, processed: 1, eligible: 1, decryptFailed: 1, invalidTime: 1, history: 1 });
   assert.match(relayWarning({ phase: 'running', lastRead }), /無法解密/);
   assert.ok(!JSON.stringify(lastRead).includes('SYNTHETIC_SECRET'));
 });

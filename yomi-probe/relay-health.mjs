@@ -9,11 +9,12 @@ export function requireRelayEncryption(service) {
 }
 
 // Snapshot counts only: never include message text, sender IDs or key material.
-export function inspectRelayRead(messages, seen, startedAt) {
+export function inspectRelayRead(messages, seen, startedAt, includeMedia = false) {
   const fresh = messages.filter(message => message?.id && !seen.has(String(message.id)));
   return {
     received: messages.length,
-    eligible: unseenText(messages, seen, startedAt).length,
+    processed: messages.filter(message => message?.id && seen.has(String(message.id))).length,
+    eligible: unseenText(messages, seen, startedAt, includeMedia).length,
     decryptFailed: fresh.filter(message => Boolean(message.e2eeDecryptFailure)).length,
     invalidTime: fresh.filter(message => !Number.isFinite(Number(message.createdTime || message.deliveredTime || 0)) || Number(message.createdTime || message.deliveredTime || 0) <= 0).length,
     history: fresh.filter(message => {

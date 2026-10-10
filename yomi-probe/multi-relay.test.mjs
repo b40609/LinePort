@@ -67,6 +67,21 @@ function adapter({ recent = [], messages = [], send } = {}) {
     send: send || (async (id, text) => { calls.push([id, text]); return { id: `out-${calls.length}-${id}` }; }) };
 }
 
+test('route diagnostics distinguish old scans, new candidates and keyword rejection across restart', async () => {
+  const messages = [message('baseline', 'old', 900), message('yes', 'notice ready'), message('no', 'notice ignore')];
+  const line = adapter({ recent: [messages[0]], messages });
+  const options = { config: config({ ...rule(), include: ['notice'], exclude: ['ignore'] }), adapters: { line }, directory: await fixture(), now: () => 1000 };
+  const relay = await createMultiRelay(options);
+  await relay.tick();
+  assert.equal(line.calls.length, 1);
+  assert.deepEqual([relay.state.routes[0].lastRead.processed, relay.state.routes[0].lastRead.eligible, relay.state.routes[0].lastRead.matched, relay.state.routes[0].lastRead.filtered], [1, 2, 1, 1]);
+  const restarted = await createMultiRelay(options);
+  await restarted.tick();
+  assert.equal(line.calls.length, 1);
+  assert.equal(restarted.state.routes[0].lastRead.processed, 3);
+  assert.equal(restarted.state.routes[0].lastRead.eligible, 0);
+});
+
 test('configuration rejects overlapping edges, cycles, invalid endpoints and excessive fan-out', () => {
   assert.throws(() => config(rule(), rule('two')), /重複/);
   assert.throws(() => config(rule(), rule('reverse', [endpoint('cdestination')], [endpoint('csource')])), /循環/);
@@ -173,6 +188,33 @@ test('LINE pagination reaches a shared checkpoint, and stops safely on missing o
   assert.deepEqual(cursors, [{ messageId: 'new0', deliveredTime: 2000 }]);
   await assert.rejects(readLineSince({ ...service, getPreviousMessages: async () => page }, 'c1', 1000, new Set()), /advance/);
   await assert.rejects(readLineSince(service, 'c1', 1000, new Set(), { maxPages: 1 }), /exceeded/);
+});
+
+test('LINE mixed pages do not stop at one known checkpoint and inclusive cursors deduplicate', async () => {
+  const page = Array.from({ length: 50 }, (_, index) => message('recent-'+index, 'text', 2000+index));
+  const previous = [page[0], ...Array.from({ length: 49 }, (_, index) => message('older-'+index, 'text', 1900+index))];
+  let reads = 0;
+  const service = { getRecentMessages: async () => page, getPreviousMessages: async () => ++reads === 1 ? previous : [message('end', 'text', 900)] };
+  const rows = await readLineSince(service, 'synthetic-group', 1000, new Set(['recent-20', 'older-20']));
+  assert.equal(reads, 2);
+  assert.equal(rows.length, 100);
+  assert.ok(rows.some(row => row.id === 'older-0'));
+  assert.equal(rows.filter(row => row.id === 'recent-0').length, 1);
+});
+
+test('LINE full processed pages stop without requesting unnecessary history', async () => {
+  const page = Array.from({ length: 50 }, (_, index) => message('known-'+index));
+  const service = { getRecentMessages: async () => page, getPreviousMessages: async () => assert.fail('unnecessary history') };
+  assert.equal((await readLineSince(service, 'synthetic-group', 1000, new Set(page.map(row => row.id)))).length, 50);
+});
+
+test('LINE history cursor follows delivery order when creation timestamps differ', async () => {
+  const page = Array.from({ length: 50 }, (_, index) => ({ ...message('row-'+index, 'text', 3000-index), deliveredTime: 2000+index }));
+  const service = { getRecentMessages: async () => page, getPreviousMessages: async (id, count, cursor) => {
+    assert.deepEqual(cursor, { messageId: 'row-0', deliveredTime: 2000 });
+    return [];
+  } };
+  assert.equal((await readLineSince(service, 'synthetic-group', 1000, new Set())).length, 50);
 });
 
 test('LINE directory accepts only current member groups and friends, excluding official accounts', async () => {

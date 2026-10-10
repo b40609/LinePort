@@ -23,7 +23,8 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
         if (state.app !== 'line-relay-bridge') return { phase: 'legacy' };
         // Only expose known, non-credential status fields to the page.
         const safe = Object.fromEntries(['phase', 'stage', 'source', 'destination', 'polls', 'forwarded', 'uncertain', 'errors', 'lastPoll', 'retrySeconds'].map(key => [key, state[key]]));
-        if (state.lastRead) safe.lastRead = Object.fromEntries(['received', 'eligible', 'decryptFailed', 'invalidTime', 'history'].map(key => [key, Number.isSafeInteger(state.lastRead[key]) && state.lastRead[key] >= 0 ? state.lastRead[key] : 0]));
+        const readCounts = value => Object.fromEntries(['received', 'processed', 'eligible', 'matched', 'filtered', 'decryptFailed', 'invalidTime', 'history'].map(key => [key, Number.isSafeInteger(value?.[key]) && value[key] >= 0 ? value[key] : 0]));
+        if (state.lastRead) safe.lastRead = readCounts(state.lastRead);
         safe.warning = relayWarning(safe);
         if (state.version === 3) {
           const endpoint = value => ({ platform: ['telegram', 'discord'].includes(value?.platform) ? value.platform : 'line', id: String(value?.id || '').slice(0, 100), name: String(value?.name || '').slice(0, 100) });
@@ -34,6 +35,7 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
             forwarded: count(route.forwarded), pending: count(route.pending), uncertain: count(route.uncertain), errors: count(route.errors), skipped: count(route.skipped),
             lastSend: typeof route.lastSend === 'string' ? route.lastSend.slice(0, 40) : null, warning: String(route.warning || '').slice(0, 300), replyNotice: String(route.replyNotice || '').slice(0, 200),
             retryAt: count(route.retryAt),
+            lastRead: route.lastRead ? readCounts(route.lastRead) : null,
           })) : [];
           safe.sources = Array.isArray(state.sources) ? state.sources.slice(0, 100).map(source => ({ ...endpoint(source), polls: count(source.polls), received: count(source.received), decryptFailed: count(source.decryptFailed), lastPoll: typeof source.lastPoll === 'string' ? source.lastPoll.slice(0, 40) : null, warning: String(source.warning || '').slice(0, 300) })) : [];
           safe.warning = ['degraded', 'failed'].includes(state.phase) ? '部分路線受阻，請查看各路線與來源狀態' : '';

@@ -2,9 +2,9 @@
 
 在 Windows 背景轉送 LINE 與 Telegram 訊息。支援多來源、多目的、指定發訊者、內容篩選及選用的 Discord 文字目的。
 
-v0.8.2 優先顯示本機別名，並改善人員清單切換與保存；平台名稱供核對，篩選仍依固定 ID。154 項模擬測試通過。[本次更新](docs/RELEASE-0.8.2.md)
+v0.8.3 改善 LINE 混合頁面補讀，並顯示每條路線的已處理、新候選與條件排除數，方便排查未轉送原因。161 項模擬測試通過；本次未收件的真機原因仍待確認。[本次更新](docs/RELEASE-0.8.3.md)
 
-[下載 v0.8.2 ZIP](https://github.com/b40609/LinePort/releases/download/v0.8.2/LinePort-v0.8.2.zip) · [更新與 SHA-256](docs/RELEASE-0.8.2.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
+[下載 v0.8.3 ZIP](https://github.com/b40609/LinePort/releases/download/v0.8.3/LinePort-v0.8.3.zip) · [更新與 SHA-256](docs/RELEASE-0.8.3.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
 
 [手機示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-mobile-0.7.jpg)（v0.7.2 歷史畫面；名稱、ID、訊息均為假資料）。
 

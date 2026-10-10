@@ -37,6 +37,15 @@ test('decrypt failures are visible without exposing upstream diagnostics or mess
   assert.ok(!JSON.stringify(state).includes('SYNTHETIC_SECRET'));
 });
 
+test('per-route read diagnostics expose only nonnegative counts', async () => {
+  const request = async () => ({ ok: true, json: async () => ({ app: 'line-relay-bridge', version: 3, phase: 'running', routes: [{ lastRead: { received: 50, processed: 48, eligible: 2, matched: 1, filtered: 1, history: -1, text: 'SYNTHETIC_SECRET', senderId: 'SYNTHETIC_PRIVATE_ID' } }] }) });
+  const state = await createRelayController({ request }).status();
+  assert.equal(state.routes[0].lastRead.processed, 48);
+  assert.equal(state.routes[0].lastRead.filtered, 1);
+  assert.equal(state.routes[0].lastRead.history, 0);
+  assert.ok(!JSON.stringify(state).includes('SYNTHETIC_'));
+});
+
 test('startup errors report the failed relay stage without subprocess output', async () => {
   const request = async () => ({ ok: true, json: async () => ({ app: 'line-relay-bridge', phase: 'failed', stage: 'e2ee_keys' }) });
   const controller = createRelayController({ request, run: async () => { throw new Error('SYNTHETIC_SECRET'); } });
