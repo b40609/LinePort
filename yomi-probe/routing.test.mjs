@@ -7,6 +7,7 @@ import vm from 'node:vm';
 import { normalizeConfig } from './route-config.mjs';
 import { createMultiRelay } from './multi-relay.mjs';
 import { previewRules } from './user-tools.mjs';
+import { TelegramRateLimit } from './telegram.mjs';
 
 const endpoint = (platform, id) => ({ platform, id, name: id });
 const sources = [endpoint('line', 'csenders'), endpoint('telegram', '-1001'), endpoint('telegram', '-1002')];
@@ -17,6 +18,40 @@ const value = () => normalizeConfig({ version: 1, rules: sources.map((source, in
   senderAllowlist: { [source.platform + ':' + source.id]: source.platform === 'line' ? ['usender1', 'usender2', 'usender3'] : ['123'] },
   include: keywords, exclude: [], prefix: '[來源' + index + '] ',
 })) });
+
+test('twelve pairs isolate LINE uncertainty, persist Telegram cooldown, and recover while sources are offline', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-isolation-'));
+  const calls = [], accepted = [], config = value();
+  let clock = 1000, limited = false, uncertain = false, offline = false;
+  const adapter = platform => ({ identity: 'synthetic-' + platform, prepare: async () => {}, recent: async () => [],
+    read: async id => { if (offline) throw new Error('synthetic disconnected');
+      return [{ id: id + ':notice', from: platform === 'line' ? 'usender1' : '123', text: '公告', createdTime: 1100 }]; },
+    send: async (id, text) => {
+      calls.push([platform, id, text]);
+      if (platform === 'telegram' && !limited) { limited = true; throw new TelegramRateLimit(5); }
+      if (platform === 'line' && id === 'creaders1' && !uncertain) { uncertain = true; throw new Error('synthetic lost acknowledgement'); }
+      accepted.push([platform, id, text]); return { id: 'synthetic-output-' + accepted.length };
+    } });
+  const options = { config, adapters: { line: adapter('line'), telegram: adapter('telegram') }, directory, now: () => clock, pause: async () => {} };
+  const relay = await createMultiRelay(options); await relay.tick();
+  assert.equal(relay.state.routes.filter(route => route.phase === 'blocked').length, 1);
+  assert.equal(accepted.filter(row => row[0] === 'line').length, 5);
+  // Another destination may already be in flight when the first 429 arrives.
+  const acceptedBeforeRestart = accepted.length;
+  const attemptsBeforeRestart = calls.filter(row => row[0] === 'telegram').length;
+  assert.ok(attemptsBeforeRestart <= 2);
+  const blockedText = calls.find(row => row[0] === 'line' && row[1] === 'creaders1')[2];
+  offline = true;
+  const restarted = await createMultiRelay(options); await restarted.tick();
+  assert.equal(calls.filter(row => row[0] === 'telegram').length, attemptsBeforeRestart);
+  assert.equal(accepted.length, acceptedBeforeRestart);
+  clock = 6000; await restarted.tick();
+  assert.equal(accepted.filter(row => row[0] === 'telegram').length, 6);
+  assert.equal(calls.filter(row => row[0] === 'line' && row[1] === 'creaders1' && row[2] === blockedText).length, 1);
+  assert.equal(new Set(accepted.map(row => JSON.stringify(row))).size, 11);
+  await restarted.tick(); assert.equal(accepted.length, 11);
+  assert.equal(restarted.state.routes.filter(route => route.phase === 'blocked').length, 1);
+});
 
 test('three sender sources fan out to four mixed destinations and restart preserves successful pairs', async () => {
   const deliveries = [], reads = [];
@@ -62,7 +97,7 @@ test('mixed destinations preview explicitly reports caption only and rejects med
   const blank = previewRules({ config, source: 'telegram:-1001', sender: '123', text: '', timestamp: 1100,
     media: { kind: 'photo', fileSize: 1000000 } }).results[0];
   assert.ok(blank.destinations.every(row => !row.eligible));
-  assert.throws(() => normalizeConfig({ ...config, rules: config.rules.map(rule => ({ ...rule, media: true })) }), /純 Telegram|Telegram → Telegram/);
+  assert.throws(() => normalizeConfig({ ...config, rules: config.rules.map(rule => ({ ...rule, media: true })) }), /Telegram 來源/);
 });
 
 test('selection coverage explains twelve pairs and media limitations without changing editor options', async () => {
@@ -75,7 +110,7 @@ test('selection coverage explains twelve pairs and media limitations without cha
   const text = vm.runInContext('coverageText(sources,destinations,false)', context);
   assert.match(text, /3 個來源 → 4 個目的，共 12 組配對/);
   assert.match(text, /圖片／檔案本身不會送達/);
-  assert.match(text, /LINE 圖片尚未支援/);
-  assert.match(vm.runInContext('coverageText(sources,destinations,true)', context), /另建純 Telegram 規則/);
+  assert.match(text, /LINE 來源圖片尚未支援/);
+  assert.match(vm.runInContext('coverageText(sources,destinations,true)', context), /LINE 來源尚未支援/);
   assert.match(vm.runInContext('coverageText([],[],false)', context), /先選來源與目的/);
 });

@@ -40,6 +40,35 @@ export function createTelegramClient(token, { request = fetch } = {}) {
     getChat: id => call('getChat', { chat_id: id }),
     getChatMember: (id, userId) => call('getChatMember', { chat_id: id, user_id: userId }),
     getUpdates: (offset, timeout = 15) => call('getUpdates', { offset, timeout, limit: 100, allowed_updates: ['message', 'channel_post'] }),
+    async downloadPhoto(value) {
+      const payload = mediaPayload(value);
+      if (payload.kind !== 'photo') throw new RelayError('Telegram → LINE 目前只支援圖片，檔案仍保留待送；請另建 Telegram 檔案規則');
+      let reader;
+      try {
+        const file = await call('getFile', { file_id: payload.fileId });
+        if (file?.file_id !== payload.fileId || file.file_size !== payload.fileSize
+          || typeof file.file_path !== 'string' || !/^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_.-]+)+$/.test(file.file_path)
+          || file.file_path.split('/').some(part => part === '.' || part === '..')) throw new Error('Invalid file metadata');
+        const response = await request(`https://api.telegram.org/file/bot${token}/${file.file_path}`, { signal: AbortSignal.timeout(15000), redirect: 'error' });
+        if (!response.ok || !response.body?.getReader) throw new Error('Missing stream');
+        reader = response.body.getReader();
+        const chunks = []; let length = 0;
+        while (true) {
+          const { done, value: chunk } = await reader.read(); if (done) break;
+          length += chunk.byteLength;
+          if (length > payload.fileSize || length > 10000000) throw new Error('Download too large');
+          chunks.push(Buffer.from(chunk));
+        }
+        if (length !== payload.fileSize) throw new Error('Truncated download');
+        const bytes = Buffer.concat(chunks, length);
+        const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+        const png = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+        if (!jpeg && !png) throw new Error('Unsupported image format');
+        return { bytes, fileName: png ? 'image.png' : 'image.jpg' };
+      } catch {
+        throw new RelayError('圖片下載或格式驗證失敗，尚未呼叫 LINE 發送；待送紀錄已保留，請檢查來源附件與連線後停止並重新啟動');
+      } finally { if (reader) { try { await reader.cancel(); } catch {} reader.releaseLock(); } }
+    },
     async send(id, text, { replyTo } = {}) {
       let method = 'sendMessage', data = { chat_id: id, text };
       if (typeof text !== 'string') {

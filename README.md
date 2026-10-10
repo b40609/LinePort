@@ -2,11 +2,11 @@
 
 在 Windows 背景轉送 LINE 與 Telegram 訊息。支援多來源、多目的、指定發訊者、內容篩選及選用的 Discord 文字目的。
 
-v0.7.2 將介面、文件、範例與示範畫面統一為通用訊息轉送工具。關鍵字範例採公告、通知、提醒，需自行選用；既有規則不會自動改寫。136 項 Mock 測試通過。[本次更新](docs/RELEASE-0.7.2.md)
+v0.8.0 可勾選 LINE 已加入成員、查看每個來源的指定人員摘要，並選用 Telegram → LINE 圖片轉送。三來源／四目的的限流、不明結果與重啟隔離已補上測試；148 項測試通過。[本次更新](docs/RELEASE-0.8.0.md)
 
-[下載 v0.7.2 ZIP](https://github.com/b40609/LinePort/releases/download/v0.7.2/LinePort-v0.7.2.zip) · [更新與 SHA-256](docs/RELEASE-0.7.2.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
+[下載 v0.8.0 ZIP](https://github.com/b40609/LinePort/releases/download/v0.8.0/LinePort-v0.8.0.zip) · [更新與 SHA-256](docs/RELEASE-0.8.0.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
 
-[手機示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-mobile-0.7.jpg)（名稱、ID、訊息均為假資料）。
+[手機示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-mobile-0.7.jpg)（v0.7.2 歷史畫面；名稱、ID、訊息均為假資料）。
 
 ## 功能
 
@@ -14,8 +14,8 @@ v0.7.2 將介面、文件、範例與示範畫面統一為通用訊息轉送工�
 - **跨平台**：LINE／Telegram 可轉送到 LINE、Telegram 或選用 Discord 一般文字頻道；Discord 只作目的。
 - **群組與個人**：LINE 已加入群組與好友；Telegram Bot 可存取的群組、頻道與私訊。
 - **文字篩選**：包含／排除關鍵字、加上訊息前綴。
-- **指定發訊者**：每個來源各選固定發訊者 ID；名稱改變不影響，貼圖不轉送。搭配訊息關鍵字排除純寒暄。
-- **選用時段與媒體**：台北時段外明確保留待送或略過；圖片／檔案只支援同一 Bot 的 Telegram → Telegram。
+- **指定發訊者**：每個來源各選固定發訊者 ID；LINE 可勾選已加入成員，Telegram 列最近發訊者。名稱改變不影響，貼圖不轉送。搭配訊息關鍵字排除純寒暄。
+- **選用時段與媒體**：台北時段外明確保留待送或略過；Telegram → Telegram 圖片／檔案；Telegram → LINE 支援 JPEG／PNG 圖片，說明另送。
 - **管理與保護**：規則搜尋、複製為暫停規則、各來源文字／媒體模擬、安全診斷、設定備份還原、容量監控及保留原檔的私人封存與 SHA-256 驗證。
 - **選用回覆關聯**：引用同路線已確認送達的原訊息，重啟保留對照；缺少對照時送一般訊息，不補送被篩掉的原訊息。
 - **獨立狀態**：各來源讀取診斷，各配對待送、成功與略過數；一個目的受阻時，其他配對繼續。
@@ -29,9 +29,9 @@ v0.7.2 將介面、文件、範例與示範畫面統一為通用訊息轉送工�
 | 系統 | Windows 11；實測 Node.js 26.4.0 |
 | LINE | 非官方個人帳號協定；已加入的一般群組、好友私訊 |
 | Telegram | 官方 Bot API；Bot 有權限讀取／發送的聊天室 |
-|訊息 | 可讀純文字；選用 Telegram → Telegram 圖片／檔案；目的仍以本工具帳號發送 |
+|訊息 | 可讀純文字；選用 Telegram → Telegram 圖片／檔案、Telegram → LINE 圖片；目的仍以本工具帳號發送 |
 | 規則上限 | 30 條；每條 1–10 個來源、1–10 個目的；合計最多 100 組啟用配對 |
-| 未支援 | LINE 社群 OpenChat、Slack、Discord 來源、跨 LINE 媒體、貼圖、相簿整組／影音、編輯／刪除同步、完整聊天封存 |
+| 未支援 | LINE 社群 OpenChat、Slack、Discord 來源、LINE 來源附件、LINE 目的檔案、貼圖、相簿整組／影音、編輯／刪除同步、完整聊天封存 |
 
 ## 快速開始
 

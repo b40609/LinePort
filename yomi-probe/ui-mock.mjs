@@ -9,8 +9,8 @@ service.resumeSession = async () => true;
 service.profile = { mid: 'usynthetic' };
 service.client = {
   getAllChatMids: async () => ({ memberChats: ['csource', 'cdestination'] }),
-  getChats: async () => [{ chatMid: 'csource', chatName: 'LINE 團隊示範群組' }, { chatMid: 'cdestination', chatName: '示範目的群組' }],
-  getAllContactIds: async () => ['ufriend'], getContacts: async () => [{ mid: 'ufriend', displayName: '示範朋友' }, { mid: 'usender', displayName: '示範成員' }, { mid: 'ubystander', displayName: '示範路人' }],
+  getChats: async () => [{ chatMid: 'csource', chatName: 'LINE 團隊示範群組', extra: { 1: { 4: { usender: 1, usilent: 1, ubystander: 1 }, 5: { uinvited: 1 } } } }, { chatMid: 'cdestination', chatName: '示範目的群組' }],
+  getAllContactIds: async () => ['ufriend'], getContacts: async () => [{ mid: 'ufriend', displayName: '示範朋友' }, { mid: 'usender', displayName: '示範成員' }, { mid: 'ubystander', displayName: '示範路人' }, { mid: 'usilent', displayName: '尚未發言成員' }],
 };
 service.getRecentMessages = async () => [{ id: 'synthetic-message', from: 'usender', text: '公告：明天系統更新 <script> 不會執行', createdTime: Date.now() }];
 let config = { version: 1, rules: [] }, token = '', discordToken = '', tgProtected = false, dcProtected = false, relay = { phase: 'stopped' };

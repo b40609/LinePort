@@ -12,15 +12,16 @@ import { inspectDelivery } from './delivery-review.mjs';
 import { inSchedule } from './rule-options.mjs';
 import { readJournalFile, storageHealth } from './storage-health.mjs';
 import { sourceReply, destinationReply } from './reply-links.mjs';
+import { sendLinePhoto } from './line-media.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 class OperationTimeout extends RelayError {}
-async function withDeadline(operation, timeoutMs) {
+async function withDeadline(operation, timeoutMs, onTimeout) {
   let timer;
   try {
     return await Promise.race([operation, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new OperationTimeout('平台請求逾時')), timeoutMs);
+      timer = setTimeout(() => { onTimeout?.(); reject(new OperationTimeout('平台請求逾時')); }, timeoutMs);
     })]);
   } finally { clearTimeout(timer); }
 }
@@ -194,6 +195,9 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             const [id, text] = edge.pending.entries().next().value;
             if (attempted) await pause(1100);
             if (cooldowns.get(edge.destination.platform) > now() || !inSchedule(edge.rule.schedule, now())) break;
+            status.stage = 'prepare';
+            const prepared = adapters[edge.destination.platform].preparePayload
+              ? await withDeadline(adapters[edge.destination.platform].preparePayload(text), operationTimeoutMs) : undefined;
             status.stage = 'journal';
             await edge.record({ id, outcome: 'sending' }); edge.seen.add(id);
             status.stage = 'send';
@@ -204,7 +208,8 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             try {
               attempted = true;
               attemptedDestinations.add(destinationKey);
-              result = await withDeadline(adapters[edge.destination.platform].send(edge.destination.id, text, replyTo ? { replyTo } : {}), operationTimeoutMs);
+              const controller = new AbortController();
+              result = await withDeadline(adapters[edge.destination.platform].send(edge.destination.id, text, { ...(prepared ? { prepared, signal: controller.signal } : {}), ...(replyTo ? { replyTo } : {}) }), operationTimeoutMs, () => controller.abort());
               if (!result?.id) throw new Error('Missing acknowledgement');
             } catch (error) {
               if (edge.destination.platform === 'telegram' && error instanceof TelegramRateLimit || edge.destination.platform === 'discord' && error instanceof DiscordRateLimit) {
@@ -220,8 +225,10 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
               throw error;
             }
             status.stage = 'journal';
-            const key = `${adapters[edge.destination.platform].identity}:${endpointKey(edge.destination)}:${result.id}`;
-            await writeRecord(outputFile, { key }); outputs.add(key);
+            for (const outputId of new Set([result.id, ...(result.ids || [])])) {
+              const key = `${adapters[edge.destination.platform].identity}:${endpointKey(edge.destination)}:${outputId}`;
+              await writeRecord(outputFile, { key }); outputs.add(key);
+            }
             const acknowledged = destinationReply(edge.destination.platform, edge.destination.id, result.id);
             await edge.record({ id, outcome: 'sent', ...(acknowledged ? { destinationId: acknowledged } : {}) });
             if (acknowledged) edge.delivered.set(id, acknowledged);
@@ -258,6 +265,7 @@ export async function runMultiRelay(state, directory, { createLineService }) {
   if (configRevision(config) !== process.env.LINEPORT_CONFIG_REVISION) throw new RelayError('規則已變動，請停止後重新啟動');
   const endpoints = config.rules.filter(rule => rule.enabled).flatMap(rule => [...rule.sources, ...rule.destinations]);
   const adapters = {}, platformErrors = {};
+  let telegramMediaClient;
   if (endpoints.some(endpoint => endpoint.platform === 'discord')) {
     try {
       const client = createDiscordClient(await store.discordToken()), me = await client.getMe();
@@ -282,7 +290,9 @@ export async function runMultiRelay(state, directory, { createLineService }) {
           if (service.loginRequired) throw new RelayError('LINE 登入已失效，請停止後重新授權');
           return readLineSince(service, id, time, known);
         },
-        send: (id, text, options) => sendRelayText(service, id, text, options),
+        preparePayload: text => typeof text === 'string' ? undefined : telegramMediaClient
+          ? telegramMediaClient.downloadPhoto(text) : Promise.reject(new RelayError('Telegram 圖片來源未連結，待送已保留；請重新連結平台')),
+        send: (id, text, options) => typeof text === 'string' ? sendRelayText(service, id, text, options) : sendLinePhoto(service, id, text, options.prepared, options),
       };
     } catch (error) { platformErrors.line = error instanceof RelayError ? error.message : 'LINE 連結失敗，請檢查登入、好友列表與 E2EE 金鑰'; }
   }
@@ -290,6 +300,7 @@ export async function runMultiRelay(state, directory, { createLineService }) {
     try {
       const client = createTelegramClient(await store.telegramToken()), me = await client.getMe();
       if (!Number.isSafeInteger(me?.id)) throw new Error('Missing Telegram identity');
+      telegramMediaClient = client;
       const sourceIds = config.rules.filter(rule => rule.enabled).flatMap(rule => rule.sources).filter(endpoint => endpoint.platform === 'telegram').map(endpoint => endpoint.id);
       if (sourceIds.length && (await client.getWebhookInfo()).url) throw new RelayError('此 Bot 已設定 webhook，請使用另一個專用 Bot');
       const inbox = await createTelegramInbox(path.join(directory, `lineport-telegram-inbox-${me.id}.jsonl`), client, sourceIds);

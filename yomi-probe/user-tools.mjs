@@ -28,13 +28,13 @@ export function previewRules(input) {
       summary: media ? `${kind} · ${content.fileSize} bytes；說明含前綴 ${text.length} 字元` : text === null ? '不轉送' : input.media ? '媒體轉送關閉；只轉送說明文字，不含附件' : '文字',
       replyReason: input.reply && content !== null ? rule.replies ? '實際轉送將引用此路線已確認送達的原訊息；找不到對照時改送一般訊息。模擬不讀取真實對照' : '回覆關聯關閉；會以一般訊息轉送' : '',
       destinations: rule.destinations.map(destination => ({ ...destination,
-        eligible: rule.enabled && text !== null && !(destination.platform === 'telegram' && text.length > 4096 || destination.platform === 'discord' && text.length > 2000),
-        reason: !rule.enabled ? '規則已暫停' : failure || (text === null ? textRejection(rule, message, input.source, Boolean(input.media && rule.media)) : destination.platform === 'telegram' && text.length > 4096 ? '含前綴超過 Telegram 4,096 字元上限' : destination.platform === 'discord' && text.length > 2000 ? '含前綴超過 Discord 2,000 字元上限' : held ? '符合規則；時段外保留待送，到時段內才發送' : `符合${kind}規則；實際送達仍取決於平台權限與連線`) })) };
+        eligible: rule.enabled && text !== null && !(media && destination.platform === 'line' && content.kind !== 'photo') && !(destination.platform === 'telegram' && text.length > 4096 || destination.platform === 'discord' && text.length > 2000),
+        reason: !rule.enabled ? '規則已暫停' : failure || (media && destination.platform === 'line' && content.kind !== 'photo' ? 'LINE 目的尚不支援檔案；實際運作會保留待送並暫停此配對，Telegram 目的仍可處理' : text === null ? textRejection(rule, message, input.source, Boolean(input.media && rule.media)) : destination.platform === 'telegram' && text.length > 4096 ? '含前綴超過 Telegram 4,096 字元上限' : destination.platform === 'discord' && text.length > 2000 ? '含前綴超過 Discord 2,000 字元上限' : held ? '符合規則；時段外保留待送，到時段內才發送' : media && destination.platform === 'line' ? '符合圖片規則；只接受 JPEG／PNG。LINE 先送圖片，再另送說明；任一步結果不明即暫停，不自動重送' : `符合${kind}規則；實際送達仍取決於平台權限與連線`) })) };
   }) };
 }
 
 export function settingsBackup(config) {
-  return { format: 'lineport-settings', version: 1, appVersion: '0.7.2', exportedAt: new Date().toISOString(), config: normalizeConfig(config) };
+  return { format: 'lineport-settings', version: 1, appVersion: '0.8.0', exportedAt: new Date().toISOString(), config: normalizeConfig(config) };
 }
 export function validateBackup(backup) {
   if (!backup || backup.format !== 'lineport-settings' || backup.version !== 1) throw new HttpError(400, '不支援的備份格式；請使用 LinePort 設定備份 JSON');
@@ -45,7 +45,7 @@ export function validateBackup(backup) {
 export function safeDiagnostics(relay, connected) {
   const count = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
   const phases = new Set(['running', 'stopped', 'starting', 'degraded', 'failed', 'blocked', 'unavailable', 'legacy']);
-  return { format: 'lineport-diagnostics', version: 1, appVersion: '0.7.2', exportedAt: new Date().toISOString(), lineConnected: connected === true,
+  return { format: 'lineport-diagnostics', version: 1, appVersion: '0.8.0', exportedAt: new Date().toISOString(), lineConnected: connected === true,
     phase: phases.has(relay.phase) ? relay.phase : 'unavailable',
     totals: Object.fromEntries(['forwarded', 'uncertain', 'errors', 'polls'].map(key => [key, count(relay[key])])),
     routes: (Array.isArray(relay.routes) ? relay.routes : []).slice(0, 100).map((route, index) => ({ route: index + 1, phase: phases.has(route.phase) ? route.phase : 'unavailable',

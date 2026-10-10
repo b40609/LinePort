@@ -19,7 +19,8 @@ export function normalizeOptions(rule, sources, destinations) {
     schedule = { timezone: 'Asia/Taipei', days: [...new Set(value.days)].sort(), start: value.start, end: value.end, outside: value.outside };
   }
   if (rule.media !== undefined && typeof rule.media !== 'boolean') invalid('圖片與檔案設定需為開啟或關閉');
-  if (rule.media && [...sources, ...destinations].some(value => value.platform !== 'telegram')) invalid('圖片／檔案目前僅支援同一 Bot 的 Telegram → Telegram；請另建純 Telegram 規則');
+  if (rule.media && (sources.some(value => value.platform !== 'telegram') || destinations.some(value => !['telegram', 'line'].includes(value.platform)))) invalid('附件需使用 Telegram 來源；可送往 Telegram，圖片另可送往 LINE。LINE 來源與 Discord 媒體尚未支援');
+  if (rule.media && rule.replies && destinations.some(value => value.platform === 'line')) invalid('Telegram → LINE 圖片目前不能保留回覆關聯，請關閉回覆或拆分規則');
   if (rule.replies !== undefined && typeof rule.replies !== 'boolean') invalid('回覆關聯設定需為開啟或關閉');
   return { senderAllowlist, schedule, media: rule.media === true, replies: rule.replies === true };
 }

@@ -14,7 +14,7 @@ import { createTelegramClient, createTelegramInbox, telegramMessage } from './te
 import { previewRules, settingsBackup, validateBackup, safeDiagnostics } from './user-tools.mjs';
 import { createDeliveryReviewStore } from './delivery-review.mjs';
 import { storageHealth, privateSnapshot } from './storage-health.mjs';
-import { recentSenders } from './source-senders.mjs';
+import { recentSenders, lineSourceSenders } from './source-senders.mjs';
 import { createDiscordClient, discordId } from './discord.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -92,9 +92,7 @@ const server = http.createServer(async (req, res) => {
         if (input.platform === 'line') {
           if (!state.connected) throw new HttpError(401, '請先登入 LINE');
           if (!(await lineDirectory(service)).some(endpoint => endpoint.id === input.id)) throw new HttpError(400, '來源不在目前 LINE 群組或好友列表');
-          const senders = recentSenders(await service.getRecentMessages(input.id, 50), 'line');
-          const contacts = senders.length ? await service.client.getContacts(senders.map(sender => sender.id)) : [];
-          return senders.map(sender => ({ ...sender, name: String(contacts.find(person => person.mid === sender.id)?.displayName || sender.id).slice(0, 100) }));
+          return lineSourceSenders(service, input.id);
         }
         if (input.platform !== 'telegram' || typeof input.id !== 'string' || !/^-?[1-9]\d{0,15}$/.test(input.id) || !Number.isSafeInteger(Number(input.id))) throw new HttpError(400, '請選取有效來源');
         const client = telegramFactory(await settingsStore.telegramToken());
@@ -113,7 +111,7 @@ const server = http.createServer(async (req, res) => {
           return message?.chatId === input.id ? { ...message, senderName: raw.sender_chat?.title || [raw.from?.first_name, raw.from?.last_name].filter(Boolean).join(' ') } : {};
         }), ...saved.slice(-100).reverse()], 'telegram');
       });
-      return send(res, 200, { senders: result, explanation: '只列最近可讀訊息的發訊者，不是完整成員列表；ID 維持穩定，名稱僅供辨認。匿名管理員只能辨識其代表的聊天室，無法識別個人。' });
+      return send(res, 200, Array.isArray(result) ? { senders: result, listing: 'recent', explanation: 'Telegram 只列最近可讀訊息的發訊者，不是完整成員列表；固定 ID 不受改名影響。匿名管理員只能辨識其代表的聊天室，無法識別個人。' } : result);
     }
     if (req.url === '/api/delivery/resolve' && reviewStore) {
       await requireStopped();

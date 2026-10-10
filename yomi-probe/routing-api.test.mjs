@@ -25,11 +25,25 @@ async function setup(t) {
     });
     request.on('error', reject); request.end(data === undefined ? undefined : JSON.stringify(data));
   });
-  return { call, starts, setPhase: value => { phase = value; } };
+  return { call, starts, service, setPhase: value => { phase = value; } };
 }
 const endpoint = (id, platform = 'line') => ({ id, platform, name: '同名' });
 const config = (platform = 'line') => ({ version: 1, rules: [{ id: 'rule', name: '同名群組測試', enabled: true,
   sources: [endpoint(platform === 'line' ? 'c1' : '-1', platform)], destinations: [endpoint(platform === 'line' ? 'u1' : '-2', platform)] }] });
+
+test('sender discovery requires login and a known source, returns members without reading or sending', async t => {
+  const { call, service, setPhase } = await setup(t);
+  assert.equal((await call('source/senders', endpoint('c1'))).status, 401);
+  await call('resume', {});
+  service.client.getChats = async () => [{ chatMid: 'c1', chatName: '同名', extra: { 1: { 4: { usilent: 1, uactive: 2 }, 5: { uinvited: 1 } } } }];
+  service.getRecentMessages = async () => { throw new Error('Must not read messages'); };
+  const result = await call('source/senders', endpoint('c1'));
+  assert.equal(result.status, 200); assert.equal(result.body.listing, 'members');
+  assert.deepEqual(result.body.senders.map(sender => sender.id), ['usilent', 'uactive']);
+  assert.equal((await call('source/senders', endpoint('cunknown'))).status, 400);
+  setPhase('running');
+  assert.equal((await call('source/senders', endpoint('c1'))).status, 409);
+});
 async function saveRules(call, value) {
   return call('rules', { ...value, revision: (await call('rules')).body.revision });
 }
