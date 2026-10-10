@@ -8,6 +8,8 @@
 
 本次 `npm.cmd test` 148 項通過／0 失敗／0 跳過；`npm.cmd audit --json` 已知漏洞 0。瀏覽器 Mock 驗證指定人員、摘要／回填、圖片與檔案模擬，1280px／390px 無水平溢出，警告／錯誤為空。文件、版本與安全限制已更新，驗證詳見 yomi-probe/VERIFICATION.md，下載與更新見 docs/RELEASE-0.8.0.md。
 
+發布證據：功能 commit `ab2393d114bfd316b517aa29812e61aab93c969b` 已正常推送 master，標籤 v0.8.0 指向該版本。GitHub 公開正式版本頁與 ZIP／SHA256SUMS 已發布：ZIP 580,818 bytes、114 個項目，僅由標籤追蹤內容建立，未包含執行資料、JSONL、憑證目錄或 node_modules。SHA-256 `e15f9d327d52952f5e5eda79f51234118c72290f8c1582301cbf15225a5778fc` 與 GitHub asset digest、公開 SHA256SUMS 一致；公開 ZIP 下載 HTTP 200。[下載與更新](https://github.com/b40609/LinePort/releases/tag/v0.8.0)。
+
 下一步：使用專用測試群組依 docs/LIVE-ACCEPTANCE.md 驗收指定發訊者、LINE／Telegram 多目的與新圖片；需另取得具體真實收送範圍，不自行啟動。LINE 來源圖片／目的檔案、OCR、長期運作、完整 LINE 登入加密及安全容量壓縮仍待工程或驗收。先前已讀 0／官方開聊天室 1 的結論限 v0.7.2 及當時條件，不擴大保證。所有公開範例維持通用工具定位，不寫私人用途、人員或群組資訊。
 
 ## 最新：公開已讀實測報告（2026-10-10）
