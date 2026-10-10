@@ -3,12 +3,16 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import { once } from 'node:events';
+import { mkdtemp, readFile, writeFile, readdir } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { createProbeServer } from './server.mjs';
+import { configRevision, createSettingsStore, normalizeConfig } from './route-config.mjs';
 
 const fakeToken = 'test-only-token';
-async function setup(t, overrides = {}, relayController) {
+async function setup(t, overrides = {}, relayController, settingsStore) {
   const service = Object.assign(new EventEmitter(), { resumeSession: async () => true, client: { getAllChatMids: async () => ({ memberChats: [] }), getChats: async () => [] } }, overrides);
-  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin: async () => {}, relayController });
+  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin: async () => {}, relayController, settingsStore });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
@@ -47,6 +51,51 @@ test('home has nonce CSP, no-store and no unresolved placeholders', async t => {
   assert.match(result.headers['content-security-policy'], /script-src 'nonce-/);
   assert.equal(result.headers['cache-control'], 'no-store');
   assert.ok(!result.body.includes('__TOKEN__') && !result.body.includes('__NONCE__'));
+  assert.match(result.body, /v0\.8\.3 · LINE · Telegram/);
+  assert.match(result.body, /releases\/tag\/v0\.8\.3/);
+});
+test('isolated HTTP download, backup validation and restore preserve pre-restore settings', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-api-acceptance-'));
+  const secret = 'SYNTHETIC_CREDENTIAL_NOT_FOR_EXPORT';
+  const original = normalizeConfig({ version: 1, rules: [{ id: 'synthetic', name: 'Synthetic route', enabled: false,
+    sources: [{ platform: 'line', id: 'csynthetic-source', name: 'Synthetic source' }],
+    destinations: [{ platform: 'line', id: 'csynthetic-dest', name: 'Synthetic destination' }],
+    include: ['sample'], exclude: ['ignore'], prefix: '[sample] ' }] });
+  await writeFile(path.join(directory, 'lineport-rules.json'), JSON.stringify({ ...original, token: secret, rules: original.rules.map(rule => ({ ...rule, token: secret })) }));
+  const store = createSettingsStore(directory);
+  const relay = { status: async () => ({ phase: 'stopped', forwarded: 3, warning: secret, routes: [{ phase: 'stopped', forwarded: 3, name: secret, token: secret }] }) };
+  const { call } = await setup(t, {}, relay, store);
+  const backupReply = await call('/api/settings/backup', undefined, {}, 'GET');
+  const diagnosticReply = await call('/api/diagnostics', undefined, {}, 'GET');
+  assert.equal(backupReply.status, 200);
+  assert.equal(diagnosticReply.status, 200);
+  for (const [filename, reply] of [['downloaded-settings.json', backupReply], ['downloaded-diagnostics.json', diagnosticReply]]) {
+    assert.equal(reply.headers['cache-control'], 'no-store');
+    assert.ok(!reply.body.includes(secret));
+    await writeFile(path.join(directory, filename), reply.body);
+    assert.deepEqual(JSON.parse(await readFile(path.join(directory, filename), 'utf8')), JSON.parse(reply.body));
+  }
+  const backup = JSON.parse(backupReply.body);
+  const diagnostics = JSON.parse(diagnosticReply.body);
+  assert.equal(backup.appVersion, '0.8.3');
+  assert.deepEqual(backup.config, original);
+  assert.equal(diagnostics.appVersion, '0.8.3');
+  assert.deepEqual(Object.keys(diagnostics.routes[0]).sort(), ['errors', 'forwarded', 'pending', 'phase', 'route', 'skipped', 'uncertain']);
+  const before = await readFile(path.join(directory, 'lineport-rules.json'), 'utf8');
+  const invalid = { ...backup, version: 999 };
+  assert.equal((await call('/api/settings/validate', JSON.stringify({ backup: invalid }))).status, 400);
+  assert.equal((await call('/api/settings/restore', JSON.stringify({ backup: invalid, revision: configRevision(original) }))).status, 400);
+  assert.equal((await call('/api/settings/restore', JSON.stringify({ backup, revision: 'stale' }))).status, 409);
+  assert.equal(await readFile(path.join(directory, 'lineport-rules.json'), 'utf8'), before);
+  assert.equal((await readdir(directory)).some(name => name.startsWith('lineport-settings-before-restore-')), false);
+  assert.equal((await call('/api/settings/validate', JSON.stringify({ backup }))).status, 200);
+  const changedBackup = { ...backup, config: { version: 1, rules: [] } };
+  const restored = await call('/api/settings/restore', JSON.stringify({ backup: changedBackup, revision: configRevision(original) }));
+  assert.equal(restored.status, 200);
+  const result = JSON.parse(restored.body);
+  assert.match(result.backup, /^lineport-settings-before-restore-[a-f0-9-]+\.json$/);
+  assert.deepEqual(JSON.parse(await readFile(path.join(directory, result.backup), 'utf8')), original);
+  assert.deepEqual(await store.load(), { version: 1, rules: [] });
 });
 test('malformed bodies rejected; unauthenticated group read blocked', async t => {
   const { call } = await setup(t);
