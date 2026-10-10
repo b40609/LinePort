@@ -2,6 +2,8 @@
 
 接續 master f9e7747，開始時乾淨。LINE 成員清單優先 displayNameOverridden，與原始名稱不同時並列；新增每規則、每來源的 senderAliases，可保存、摘要、編輯回填及備份還原。名稱不參與 senderMatches，固定 ID 判斷維持不變。152 項 Mock 通過、npm audit 已知漏洞 0；獨立 18767 合成資料驗證保存／清空／回填／重新整理摘要，未啟動真實轉送。程式及版本已更新，原正式服務尚須停止後重新啟動載入新版，不能自動啟動 relay。沒有讀取真實憑證或修改私人規則。
 
+發布證據：功能 commit e015d62 已正常推送 master，v0.8.1 標籤與 GitHub Release 已發布。ZIP 588,869 bytes、117 項目，追蹤內容封裝且排除資料／憑證／node_modules／JSONL；SHA-256 d4f936cdc6e84995d56c38186734c2635beb7c5c2f19e3790e129d6fbdadb061 與 GitHub asset digest 一致。
+
 使用者已確認先前清單成員與自訂名稱對應；公開文件不保存該私人名稱。下一步重新啟動設定服務後核對實際 LINE 自訂名稱欄位，以既有專用來源／目的完成指定人員正反例與停止重啟去重。Telegram 依使用者要求暫不實測；跨平台、媒體及長期運作未全部驗收。下載與限制見 docs/RELEASE-0.8.1.md。
 
 ## 最新：LINE 實機文字篩選驗收（2026-10-10）
