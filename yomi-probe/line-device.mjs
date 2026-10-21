@@ -2,8 +2,8 @@
 // Apply before importing login modules, which snapshot some defaults on import.
 // These are LINE protocol identities, not host OS or primary-device requirements.
 const profiles = Object.freeze({
-  DESKTOPWIN: Object.freeze({ id: 'DESKTOPWIN', label: 'Windows 桌面實驗模式', directory: 'LineCallYomiProbe-DESKTOPWIN', notice: '使用 Windows 桌面登入身分，適合需要保留 iPad LINE 的使用者先行測試。主要裝置授權登入與共存尚待實機驗收；可能使其他電腦版 LINE 登出。' }),
-  DESKTOPMAC: Object.freeze({ id: 'DESKTOPMAC', label: 'Mac 桌面模式', directory: 'LineCallYomiProbe', notice: '使用 LINE 桌面登入身分，主機不需是 Mac。登入可能使官方電腦版 LINE 登出。' }),
+  DESKTOPWIN: Object.freeze({ id: 'DESKTOPWIN', label: 'Windows 桌面實驗（DESKTOPWIN，未驗收）', directory: 'LineCallYomiProbe-DESKTOPWIN', notice: '與原有桌面授權使用相同登入流程，但宣告的用戶端類型不同。真實登入與共存尚未驗收，不保證能保留官方 iPad LINE；也可能使官方電腦版登出。' }),
+  DESKTOPMAC: Object.freeze({ id: 'DESKTOPMAC', label: '原有桌面授權（DESKTOPMAC）', directory: 'LineCallYomiProbe', notice: '這是原本在 Windows 執行時使用的桌面登入身分，並非要求使用 Mac。沿用既有登入與設定；可能使官方電腦版 LINE 登出。需要同時使用官方電腦版時，請先選 iPad QR。' }),
   IOSIPAD: Object.freeze({ id: 'IOSIPAD', label: 'iPad 實驗模式', directory: 'LineCallYomiProbe-IOSIPAD', notice: '使用 LINE iPad 登入身分，無需實體 iPad，也不限定 iPhone。首次請以主要裝置的 LINE 掃碼授權，資料獨立保存。單一帳號已確認與官方電腦版同時登入且收發正常；其他裝置組合、本模式的訊息解密與轉送仍待驗證。' }),
 });
 

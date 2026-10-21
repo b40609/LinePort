@@ -34,7 +34,11 @@ textarea{font:inherit;width:100%;border:1px solid #d7e2da;border-radius:9px;padd
 <aside>
 <section class="card"><div class="heading"><h2><span class="step">1</span>連結帳號</h2></div>
 <p><strong>__LINE_DEVICE_LABEL__</strong></p><p class="muted">__LINE_DEVICE_NOTICE__</p>
-<div class="field spaced"><label for="deviceMode">LinePort 的 LINE 登入身分</label><select id="deviceMode" aria-describedby="deviceModeHelp"><option value="DESKTOPMAC">Mac 桌面身分（原有模式）</option><option value="DESKTOPWIN">Windows 桌面身分（實驗）</option><option value="IOSIPAD">iPad 身分（QR 實驗）</option></select><p id="deviceModeHelp" class="muted"></p><button id="switchDevice">切換身分並重啟服務</button><p class="muted">依需要保留的官方 LINE 裝置選擇，不依 LinePort 主機或手機品牌決定。各身分的登入、平台連結及規則分開保存；請先保存編輯並停止轉送。切換不會自動登入或啟動轉送。</p></div>
+<div class="field spaced"><label for="deviceMode">選擇登入方式</label>
+<p><strong>要同時使用官方電腦版 LINE？先選 iPad QR。</strong>這是本次已完成單一帳號共存測試的方式，無需實體 iPad。</p>
+<p class="muted">共有 3 種登入身分、2 類登入流程。身分名稱不代表你使用的電腦或手機系統。</p>
+<ul class="muted"><li><strong>iPad QR：</strong>保留官方電腦版；其他帳號及本模式轉送仍待驗收。</li><li><strong>原有桌面授權：</strong>沿用既有登入與設定；可能使官方電腦版登出。</li><li><strong>Windows 桌面實驗：</strong>供其他桌面身分測試；真實登入與共存均未驗收，不保證可保留官方 iPad LINE。</li></ul>
+<select id="deviceMode" aria-describedby="deviceModeHelp"><option value="IOSIPAD">保留官方電腦版：iPad QR（實驗）</option><option value="DESKTOPMAC">沿用既有設定：原有桌面授權</option><option value="DESKTOPWIN">進階測試：Windows 桌面身分（未驗收）</option></select><p id="deviceModeHelp" class="muted"></p><button id="switchDevice">切換身分並重啟服務</button><p class="muted">兩種桌面身分的差別是向 LINE 宣告的用戶端類型；登入流程相同，沒有已驗證的共存優劣，不需依自己的 Windows／Mac 系統選擇。各身分的登入、平台連結及規則分開保存；請先保存編輯並停止轉送。切換不會自動登入或啟動轉送。</p></div>
 <div id="phoneField" class="field"><label for="phone">LINE 手機號碼</label><input id="phone" type="tel" inputmode="tel" autocomplete="off" placeholder="09xxxxxxxx"></div>
 <div class="stack"><button id="login" class="primary">手機授權登入</button><button id="resume">使用已保存的登入</button></div>
 <div class="stack"><button id="qrLogin">iPad QR Code 實驗登入</button><button id="cancelQr" hidden>取消 QR 登入</button></div>
@@ -264,7 +268,7 @@ function render(){const id=$('group').value;const rows=[...collected.values()].f
 async function read(){if(reading)return;const id=$('group').value;if(!id)throw new Error('請先選擇群組');reading=true;controls();try{const result=await api('messages',{id});for(const m of result.messages){const key=id+'|'+(m.id||JSON.stringify([m.time,m.sender,m.text,m.type]));collected.set(key,{...m,groupId:id,groupName:result.group});}while(collected.size>5000){collected.delete(collected.keys().next().value);$('notice').textContent='預覽已達 5,000 則，較舊內容已移除；請匯出需要保存的訊息。';}render();$('stats').textContent=new Date(result.checkedAt).toLocaleTimeString('zh-TW')+' 更新 · '+result.messages.length+' 則 · '+result.messages.filter(m=>m.text).length+' 則文字';}finally{reading=false;controls();}}
 async function loop(){try{if(!pending&&!lastState.busy)await read();}catch(e){$('notice').textContent=e.message;stopPreview();}if(polling)pollTimer=setTimeout(loop,10000);}
 $('login').onclick=()=>act(async()=>{stopPreview();await api('login',{phone:$('phone').value});$('phone').value='';await status();});
-function deviceModeHelp(){const help={DESKTOPMAC:'原有桌面身分，使用手機號碼與主要裝置授權；可能使官方電腦版 LINE 登出。',DESKTOPWIN:'需要保留 iPad LINE 時，可測試 Windows 桌面身分，以手機號碼與主要裝置授權登入。登入、解密、轉送及共存尚待實機驗收；可能使其他電腦版 LINE 登出。',IOSIPAD:'需要保留官方電腦版 LINE 時，可選 iPad 身分並掃描 QR Code。單一帳號已確認共存；其他組合及本模式轉送仍待驗收。'};$('deviceModeHelp').textContent=help[$('deviceMode').value]||'請選擇登入身分';}
+function deviceModeHelp(){const help={DESKTOPMAC:'所選：原有桌面授權（DESKTOPMAC）。手機號碼＋主要裝置授權；保留原有資料。雖然身分名稱含 Mac，原本也是在 Windows 執行。可能使官方電腦版 LINE 登出。',DESKTOPWIN:'所選：Windows 桌面實驗（DESKTOPWIN）。與原有模式同樣使用手機號碼＋主要裝置授權，但宣告的用戶端類型不同、資料獨立。真實登入、解密、轉送及共存均未驗收；不是已驗證的 iPad 共存方案，也可能使官方電腦版登出。',IOSIPAD:'所選：iPad QR（IOSIPAD）。本次實測成功的就是此模式：單一帳號完成 QR 登入，官方電腦版仍可正常收發。其他帳號、裝置組合及本模式解密／轉送／長期共存仍待驗收。'};$('deviceModeHelp').textContent=help[$('deviceMode').value]||'請選擇登入身分';}
 $('deviceMode').onchange=()=>{deviceModeHelp();controls();};
 $('switchDevice').onclick=()=>act(async()=>{
   stopPreview();const target=$('deviceMode').value;switching=true;controls();
