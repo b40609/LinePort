@@ -11,7 +11,7 @@ v0.8.3 改善 LINE 混合頁面補讀，並顯示每條路線的已處理、新�
 ## 功能
 
 - **多來源、多目的**：每個來源轉到所有選取目的；可建立多條規則，分別啟用或暫停。
-- **跨平台**：LINE／Telegram 可轉送到 LINE、Telegram 或選用 Discord 一般文字頻道；Discord 只作目的。
+- **跨通訊平台**：LINE／Telegram 可轉送到 LINE、Telegram 或選用 Discord 一般文字頻道；Discord 只作目的。
 - **群組與個人**：LINE 已加入群組與好友；Telegram Bot 可存取的群組、頻道與私訊。
 - **文字篩選**：包含／排除關鍵字、加上訊息前綴。
 - **指定發訊者**：每個來源各選固定發訊者 ID；LINE 可勾選已加入成員，Telegram 列最近發訊者。名稱改變不影響，貼圖不轉送。搭配訊息關鍵字排除純寒暄。
@@ -35,7 +35,7 @@ v0.8.3 改善 LINE 混合頁面補讀，並顯示每條路線的已處理、新�
 
 ## 快速開始
 
-需要與官方電腦版 LINE 同時使用，可先試 [iPad 裝置實驗模式](docs/IPAD-EXPERIMENT.md)。單一帳號已確認兩邊可同時登入、官方電腦版收發正常，並通過 LinePort 群組／好友讀取與重啟恢復登入；iPad 模式的訊息解密與轉送仍待驗證。已加入獨立啟動器與資料隔離，預設登入方式保持不變。
+需要與官方電腦版 LINE 同時使用，可先試 [iPad 登入身分實驗模式](docs/IPAD-EXPERIMENT.md)。**這是 LINE 協定身分，無需實體 iPad，也不限定 iPhone；目前 LinePort 主機仍只支援 Windows。** 使用理由與驗證範圍見下方說明；此功能位於 `master` 原始碼，既有 v0.8.3 發布 ZIP 尚未包含。
 
 安裝 [Node.js](https://nodejs.org/)，下載並解壓縮本專案。在專案目錄開啟 PowerShell：
 
@@ -55,6 +55,24 @@ npm.cmd start
 只使用 Telegram 時不必登入 LINE。Telegram 來源是 Bot 可收到的訊息，並非登入個人 Telegram 帳號讀取所有聊天。電腦需保持連網、不休眠。
 
 [安裝教學](docs/INSTALL.md) · [Telegram 權限與設定](docs/USAGE.md#telegram) · [舊版更新](docs/USAGE.md#更新)
+
+## 為何新增 iPad 登入身分？解決什麼問題？
+
+使用者回報：啟動 LinePort 後，同帳號的官方電腦版 LINE 被強制登出，影響工作。原本 `DESKTOPMAC` 使用桌面登入身分；依症狀推測與官方電腦版的追加裝置登入衝突有關，尚無證據顯示是滑鼠／鍵盤操控權被搶走。LINE 官方也將「於其他追加裝置登入」列為自動登出的可能原因，但未保證任意裝置組合都能共存。[官方登出問題說明](https://help.line.me/line/smartphone/?contentId=50001462&lang=zh-Hant)
+
+本次新增 `IOSIPAD`，讓 LinePort 使用另一種追加裝置登入身分，嘗試保留官方電腦版的登入。這是可選實驗模式，預設仍為原桌面模式；失敗時不自動切回桌面登入，避免再次影響使用者。除了變更身分，也新增符合該身分的 QR／PIN 流程，以及獨立憑證、E2EE 與設定目錄。
+
+| 問題／能力 | 本次結果 |
+| --- | --- |
+| LinePort 與官方電腦版能否同時登入 | 單一真實帳號通過；使用者確認官方電腦版仍能正常收發 |
+| LinePort 能否載入群組／好友、重啟後恢復登入 | 同一帳號通過，無需重掃 QR |
+| 只改 iPad 身分仍無法完成授權 | 已改為對應的 QR 流程並完成該帳號登入；先前 code 0／4 的嘗試與修正見實驗紀錄 |
+| iPad 模式實際訊息解密、轉送與長期共存 | 尚待實機驗收；不能沿用桌面模式結果當作通過 |
+| Android／iPhone、官方 Windows／Mac 及既有平板等不同組合 | 不依主要裝置品牌限制登入；其他組合仍待實測，不保證全部共存 |
+
+軟體設計分開處理 **LinePort 主機作業系統、LINE 主要裝置、LINE 協定登入身分**。`IOSIPAD` 中的 iOS 版本是協定欄位，並非要求使用者手機安裝該版本；同理，`DESKTOPMAC` 不代表只能在 Mac 上執行。官方列出可作主要／追加裝置的多種平台，但官方 App 支援不等於本非官方工具已完成相容性驗證。[LINE 官方裝置說明](https://help.line.me/line/smartphone/sp?contentId=20000132&lang=zh-Hant)
+
+Windows 執行支援目前由 PowerShell 啟動器、ACL 與選用 DPAPI 實作，macOS／Linux 尚未移植。[相容性矩陣與設計原則](docs/COMPATIBILITY.md) · [iPad 操作、排查與完整紀錄](docs/IPAD-EXPERIMENT.md) · [200 項測試與實機驗收範圍](docs/ACCEPTANCE-2026-10-21.md)
 
 ## 運作方式
 

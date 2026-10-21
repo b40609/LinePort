@@ -1,6 +1,14 @@
 # iPad 裝置共存實驗
 
-目標：讓 LinePort 以 `IOSIPAD` 身分登入，與同帳號的官方 Windows LINE 同時使用。單一真實帳號已通過 QR 登入、群組／好友讀取、重啟後恢復登入，並確認官方電腦版同時收發正常；iPad 模式的訊息解密與轉送仍待驗收。這是實驗功能，不代表完整支援官方 iPad 協定。
+目標：讓 LinePort 以 `IOSIPAD` 身分登入，與同帳號的官方電腦版 LINE 同時使用。單一真實帳號已在 Windows 環境通過 QR 登入、群組／好友讀取、重啟後恢復登入，並確認官方電腦版同時收發正常；iPad 模式的訊息解密與轉送仍待驗收。這是實驗功能，不代表完整支援官方 iPad 協定。
+
+## 身分與實體裝置的差別
+
+`IOSIPAD` 是 LinePort 向 LINE 宣告的協定登入身分，無需實體 iPad，也不限定主要裝置為 iPhone；QR 流程由主要裝置的 LINE 掃碼並授權，不依其作業系統分流。`IOSIPAD / 26.7.2 / iOS / 18.0` 是請求中的版本組合，不是使用者手機或主機的最低規格。原 `DESKTOPMAC` 同樣是協定身分。
+
+採用此身分的原因是使用者回報原桌面登入會使官方電腦版登出；推測存在追加裝置登入衝突。改用另一類身分並配合對應 QR 流程後，本次單一帳號可共存。不能據此保證 Android、官方 Mac、已登入其他 iPad／平板等所有組合，也不能將官方 App 的支援清單視為本工具已驗收。[官方裝置類型](https://help.line.me/line/smartphone/sp?contentId=20000132&lang=zh-Hant) · [官方追加裝置登出原因](https://help.line.me/line/smartphone/?contentId=50001462&lang=zh-Hant)
+
+本次沒有把預設值全面改成 iPad，亦不新增 iPhone 專用限制；目前 LinePort 主機仍只支援 Windows。macOS／Linux 執行支援屬於獨立的主機移植工作，見[相容性矩陣與設計原則](COMPATIBILITY.md)。此模式位於 `master` 原始碼，既有 v0.8.3 發布 ZIP 尚未包含。
 
 ## 2026-10-21 實測結果
 
@@ -19,10 +27,12 @@
 
 ## 啟動與切換
 
+本模式需 [master 原始碼 ZIP](https://github.com/b40609/LinePort/archive/refs/heads/master.zip)或更新後的 Git checkout；發布頁的舊版 ZIP 不含本模式。既有安裝請先完成下列停止步驟，再更新原始碼並於 `yomi-probe` 執行 `npm.cmd ci --ignore-scripts` 安裝鎖定依賴，之後啟動 iPad 模式。
+
 1. 在舊頁面按「停止轉送」。關閉瀏覽器不會停止背景服務。
 2. 在專案目錄執行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\yomi-probe\stop-server.ps1`。這只停止本專案啟動器建立的介面程序；若是 `npm start` 手動啟動，回原終端按 Ctrl+C。
 3. 雙擊專案根目錄的 `啟動iPad實驗模式.cmd`。確認帳號區顯示「iPad 實驗模式」。
-4. 保持官方電腦版 LINE 已登入，切到「帳號連結」，按「iPad QR Code 實驗登入」。以手機 LINE 的掃描器掃描並授權；出現 PIN 時在手機完成驗證。首次不可沿用桌面模式的保存登入。
+4. 保持官方電腦版 LINE 已登入，切到「帳號連結」，按「iPad QR Code 實驗登入」。以主要裝置的 LINE 掃描器掃描並授權；出現 PIN 時在主要裝置完成驗證。首次不可沿用桌面模式的保存登入。
 5. QR Code 僅在本機產生，約六分鐘內有效；可按「取消 QR 登入」並重新申請，晚到的等待回應會被忽略。送出最終登入請求及後續金鑰初始化期間無法取消。若畫面失敗，保留階段及錯誤代碼，不需分享 QR Code 或 PIN。
 6. 之後重新啟動同一 iPad 模式，可按「使用已保存的登入」；本次已驗證可恢復。只有登入失效時才重新掃碼授權。
 

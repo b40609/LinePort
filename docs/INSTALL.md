@@ -2,7 +2,7 @@
 
 ## 環境
 
-Windows 11、Node.js 與 npm；已驗證 Node.js 26.4.0。一台持續連網、不休眠的電腦。使用 LINE 時需主要手機授權；只用 Telegram 時不需要 LINE 登入。
+Windows 11、Node.js 與 npm；已驗證 Node.js 26.4.0。一台持續連網、不休眠的電腦。使用 LINE 時需主要裝置授權；只用 Telegram 時不需要 LINE 登入。主要裝置不限定 iPhone；主機與 LINE 登入身分的差別見[相容性矩陣](COMPATIBILITY.md)。macOS／Linux 主機尚未支援。
 
 目前提供原始碼，沒有 EXE 安裝檔，不需要 .NET 或 AI API。
 
@@ -20,6 +20,8 @@ npm.cmd start
 `npm.cmd` 可避免 PowerShell 的 npm.ps1 執行原則限制。測試全用模擬服務，不對真實平台發訊。
 
 ## 連結與設定
+
+需要與官方電腦版同時使用時，可選用 master 原始碼中的 [iPad 登入身分實驗模式](IPAD-EXPERIMENT.md)；無需實體 iPad，但其他裝置組合與該模式的實際轉送仍待驗收。
 
 開啟 http://127.0.0.1:18765/：
 

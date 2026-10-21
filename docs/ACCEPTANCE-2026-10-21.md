@@ -10,6 +10,14 @@
 - Windows 介面啟動器增加 `qrcode`、`tweetnacl` 存在檢查；套件缺漏時在建立程序前提供安裝指令。
 - 失敗診斷只保留允許的階段與數值代碼，不公開憑證、PIN、私人名稱或上游原始錯誤。
 
+## 同日補充：裝置通用性與說明
+
+區分主機作業系統、LINE 主要裝置及協定登入身分，新增[相容性矩陣](COMPATIBILITY.md)並於 README 說明為何採用可選 iPad 身分、解決的登入衝突及未驗收範圍。介面改用「主要裝置」及通用生物辨識提示，不再將 Face ID／Touch ID 當作唯一授權方式；未更動登入協定或擴大主機支援。
+
+本補充執行 `node --test server.test.mjs relay-ui.test.mjs sender-editor.test.mjs line-device.test.mjs login-diagnostics.test.mjs qr-login.test.mjs`：46 項通過、0 失敗／跳過。涵蓋頁面／前端、兩種裝置的模擬登入／恢復／更新標頭、資料隔離及 QR／PIN 流程。沒有新增 Android／iPhone 分組、Mac／Linux 或實際轉送驗收；下列 200 項全套與瀏覽器紀錄屬於此前同日的檢查。
+
+另核對 45 個本機文件連結，解析 HTML 的 1 段 JavaScript、檢查 `line-device.mjs` 語法及 `git diff --check`，均通過。官方裝置類型、追加登入與登出說明已核對並附連結；官方說明不作為本工具所有裝置組合已通過的證據。
+
 ## 自動化結果
 
 - `npm.cmd test`：200 通過、0 失敗、0 跳過。
