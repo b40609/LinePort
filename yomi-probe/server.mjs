@@ -93,6 +93,7 @@ const server = http.createServer(async (req, res) => {
     // Body streams can overlap. Recheck after awaiting the body, before starting work.
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
     if (req.url === '/api/device') {
+      if (!['DESKTOPMAC', 'IOSIPAD'].includes(input.device)) throw new HttpError(400, '請選擇原有桌面授權或 iPad QR 登入');
       let target;
       try { target = lineDevice(input.device); } catch { throw new HttpError(400, '請選擇有效的 LINE 登入身分'); }
       if (typeof input.device !== 'string') throw new HttpError(400, '請選擇 LINE 登入身分');

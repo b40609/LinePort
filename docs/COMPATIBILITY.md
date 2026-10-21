@@ -1,5 +1,7 @@
 # 裝置相容性與設計原則
 
+> DESKTOPWIN 僅保留底層相容性、既有啟動器與獨立資料，未做真實登入或共存驗收；一般選單及切換 API 不開放此身分。它與 DESKTOPMAC 使用相同桌面授權流程，尚無已驗證的使用優勢，不作為官方 iPad 共存建議。
+
 更新：2026-10-21。LinePort 的設計不應綁定「Windows 電腦＋iPhone」。目前主機實作只支援 Windows；這與主要裝置、官方 LINE 電腦版及協定登入身分是不同的相容性問題。
 
 ## 三個獨立面向
@@ -8,23 +10,23 @@
 | --- | --- | --- |
 | 執行 LinePort 的主機 | 資料目錄、檔案權限、憑證保護、背景程序與啟停 | Windows 11 已實測；macOS／Linux 尚未移植 |
 | 授權登入的 LINE 主要裝置 | 在 LINE 中允許追加登入、掃碼、PIN 或生物辨識授權 | 程式不檢查 iPhone／Android 品牌或 OS；不同裝置組合仍需實機驗收 |
-| LinePort 的 LINE 協定身分 | 向 LINE 宣告的裝置類型、登入流程、Token／E2EE 及獨立資料 | 帳號連結頁可選 `DESKTOPMAC`、`DESKTOPWIN`、`IOSIPAD`；切換需重啟 |
+| LinePort 的 LINE 協定身分 | 向 LINE 宣告的裝置類型、登入流程、Token／E2EE 及獨立資料 | 帳號連結頁可選 `DESKTOPMAC`、`IOSIPAD`；切換需重啟 |
 
 `IOSIPAD` 不要求擁有 iPad；其中的 iOS 版本不是主要裝置的最低版本。`DESKTOPMAC`／`DESKTOPWIN` 也不限定主機種類。由使用者依工作需求選擇，不依 `process.platform` 或主要裝置品牌自動決定。
 
 ## 依需要保留的官方裝置選擇
 
-三種身分只有兩類流程：iPad QR，以及兩種桌面的手機號碼＋主要裝置授權。原有 DESKTOPMAC 與 DESKTOPWIN 的差異在宣告的用戶端類型／版本及獨立資料，不代表主機系統，也沒有已驗證的共存優劣。需要保留官方 iPad LINE 時，目前仍無已驗證方案；Windows 身分是進階實驗選項，不應作為一般使用者的共存承諾。前端會同時顯示三種用途及驗證狀態，避免只靠模式名稱判斷。
+一般帳號連結頁只提供 **原有桌面授權（DESKTOPMAC）** 與 **iPad QR 登入（IOSIPAD，實驗）**。要保留官方電腦版時先選本次實測的 iPad QR；沿用既有登入與設定則選原有桌面授權，後者可能使官方電腦版登出。需要保留官方 iPad LINE 時，目前沒有已驗證方案，可另行驗收原有桌面授權。選擇不依主機或手機品牌決定，無需實體 iPad／Mac。
 
 | 使用者需求 | 可選身分 | 對應登入方式 |
 | --- | --- | --- |
 | A 用戶要同時使用 LinePort 與官方 Windows 電腦版 LINE | `IOSIPAD` | iPad secondary QR／PIN；本次單一帳號共存通過 |
-| B 用戶需要保留官方 iPad LINE，讓 LinePort 使用 Windows 桌面登入 | `DESKTOPWIN` | 既有主要裝置 passwordless 授權流程；真實登入及共存待驗收 |
+| 需要保留官方 iPad LINE | 原有桌面授權（DESKTOPMAC）可另行測試 | 尚無已驗證的共存方案，不保證不影響原裝置 |
 | 沿用既有桌面授權 | `DESKTOPMAC` | 既有主要裝置 passwordless 授權流程；可能影響官方電腦版登入 |
 
 在「帳號連結」選身分並按「切換身分並重啟服務」。先保存編輯及停止轉送；登入或其他操作進行中不得切換。新程序準備成功後才釋放舊服務的監聽埠，啟用失敗則恢復原服務。切換後不自動登入或啟動轉送；各身分的 LINE 登入／E2EE、Telegram／Discord 連結、規則與轉送紀錄全部隔離，不能直接複製登入檔。
 
-一般啟動器重用目前模式；完全停止後預設仍是 `DESKTOPMAC`，可用 `啟動Windows實驗模式.cmd` 或 `啟動iPad實驗模式.cmd` 直接重開所需模式。這些選項位於 master 原始碼，既有 v0.8.3 ZIP 尚未包含。
+一般啟動器重用目前模式；完全停止後預設仍是 `DESKTOPMAC`，可用 `啟動iPad實驗模式.cmd` 直接重開所需模式。這些選項位於 master 原始碼，既有 v0.8.3 ZIP 尚未包含。
 
 [LINE 官方說明](https://help.line.me/line/smartphone/sp?contentId=20000132&lang=zh-Hant)區分主要與追加裝置，列出 iPhone、Android、iPad 與電腦等類型。這只說明官方 App 能力，不能推導本非官方工具已支援所有組合，或每類追加裝置都有永久獨立的登入名額。
 

@@ -1,10 +1,12 @@
 # 運作原理
 
+> DESKTOPWIN 僅保留底層相容性、既有啟動器與獨立資料，未做真實登入或共存驗收；一般選單及切換 API 不開放此身分。它與 DESKTOPMAC 使用相同桌面授權流程，尚無已驗證的使用優勢，不作為官方 iPad 共存建議。
+
 v0.6.0 將來源讀取、持久待送與目的發送分開。LINE 使用 Yomi 非官方個人帳號協定；Telegram 使用官方 Bot API 長輪詢；Discord 只作官方 REST 文字目的。新增作者、時段與 Telegram 媒體選項預設關閉或不限制。
 
 ## 服務與介面
 
-LinePort 主機作業系統、授權登入的 LINE 主要裝置與 LINE 協定身分分開處理。`DESKTOPMAC`／`DESKTOPWIN`／`IOSIPAD` 不代表主機或手機的硬體需求；目前主機整合仍限 Windows。需要保留官方電腦版時可選 iPad 身分，需要保留官方 iPad 時可測試 Windows 桌面身分；後者真實登入與共存尚待驗收。[相容性矩陣與擴充邊界](COMPATIBILITY.md)
+LinePort 主機作業系統、主要裝置與 LINE 協定身分分開處理；目前主機整合仍限 Windows。一般帳號連結頁只提供 **原有桌面授權（DESKTOPMAC）** 與 **iPad QR 登入（IOSIPAD，實驗）**。要保留官方電腦版時先選本次實測的 iPad QR；沿用既有登入與設定則選原有桌面授權，後者可能使官方電腦版登出。需要保留官方 iPad LINE 時，目前沒有已驗證方案，可另行驗收原有桌面授權。選擇不依主機或手機品牌決定，無需實體 iPad／Mac。[相容性矩陣](COMPATIBILITY.md)
 
 「帳號連結」頁呼叫受本機 Token 保護的 `/api/device`，要求轉送停止且無其他操作。`device-restart.mjs` 先準備獨立子程序，再釋放舊監聽埠、啟用新服務；失敗恢復舊服務。新程序使用所選身分的獨立資料目錄，不移轉憑證、自動登入或啟動轉送，頁面重載取得新的本機 Token。一般啟動器重用目前模式；完全停止後未指定身分仍預設 `DESKTOPMAC`。
 

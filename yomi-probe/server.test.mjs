@@ -14,7 +14,7 @@ test('identity switch validates input, requires stopped relay and protects the A
   let prepared = 0;
   const { call } = await setup(t, {}, { status: async () => ({ phase: 'running' }) }, undefined, undefined, undefined, async () => { prepared++; });
   assert.equal((await call('/api/device', '{"device":"IOSIPAD"}', { 'X-Probe-Token': 'wrong' })).status, 403);
-  for (const value of [{}, { device: '__proto__' }, { device: 1 }]) assert.equal((await call('/api/device', JSON.stringify(value))).status, 400);
+  for (const value of [{}, { device: '__proto__' }, { device: 1 }, { device: 'DESKTOPWIN' }]) assert.equal((await call('/api/device', JSON.stringify(value))).status, 400);
   assert.equal((await call('/api/device', '{"device":"IOSIPAD"}')).status, 409);
   assert.equal(prepared, 0);
 });
@@ -26,7 +26,7 @@ test('identity switch locks operations during preparation and reports failures s
   t.after(() => release());
   const { call } = await setup(t, {}, { status: async () => ({ phase: 'stopped' }) }, undefined, undefined, undefined, async () => { entered(); await gate; throw new Error('private details'); });
   const first = call('/api/device', '{"device":"IOSIPAD"}'); await started;
-  assert.equal((await call('/api/device', '{"device":"DESKTOPWIN"}')).status, 409);
+  assert.equal((await call('/api/device', '{"device":"IOSIPAD"}')).status, 409);
   assert.equal((await call('/api/resume')).status, 409);
   release(); const failed = await first;
   assert.equal(failed.status, 503); assert.ok(!failed.body.includes('private'));
@@ -38,9 +38,9 @@ test('switch acknowledges the selected identity before activating replacement', 
   const { call } = await setup(t, {}, { status: async () => ({ phase: 'stopped' }) }, undefined, undefined, undefined, async id => {
     target = id; return { cancel() { assert.fail('Unexpected cancellation'); }, async activate() { activated = true; } };
   });
-  const response = await call('/api/device', '{"device":"DESKTOPWIN"}');
+  const response = await call('/api/device', '{"device":"IOSIPAD"}');
   assert.equal(response.status, 202); assert.equal(response.headers.connection, 'close');
-  assert.equal(JSON.parse(response.body).device, 'DESKTOPWIN'); assert.equal(target, 'DESKTOPWIN'); assert.equal(activated, true);
+  assert.equal(JSON.parse(response.body).device, 'IOSIPAD'); assert.equal(target, 'IOSIPAD'); assert.equal(activated, true);
 });
 
 test('iPad rejects the known incompatible passwordless flow', async t => {
@@ -50,13 +50,14 @@ test('iPad rejects the known incompatible passwordless flow', async t => {
   assert.equal((await call('/api/login', '{"phone":"+886900000000"}')).status, 409);
 });
 
-test('Windows identity retains authorization login and exposes every identity choice', async t => {
+test('developer Windows identity retains compatibility but exposes only two public choices', async t => {
   const before = process.env.LINEPORT_LINE_DEVICE; process.env.LINEPORT_LINE_DEVICE = 'DESKTOPWIN';
   t.after(() => { if (before === undefined) delete process.env.LINEPORT_LINE_DEVICE; else process.env.LINEPORT_LINE_DEVICE = before; });
   let called = false;
   const { call } = await setup(t, {}, { status: async () => ({ phase: 'stopped' }) }, undefined, async () => { called = true; });
   const home = await call('/', undefined, {}, 'GET');
-  for (const identity of ['DESKTOPWIN', 'DESKTOPMAC', 'IOSIPAD']) assert.ok(home.body.includes('value="'+identity+'"'));
+  for (const identity of ['DESKTOPMAC', 'IOSIPAD']) assert.ok(home.body.includes('value="'+identity+'"'));
+  assert.ok(!home.body.includes('value="DESKTOPWIN"'));
   assert.match(home.body, /name="lineport-device" content="DESKTOPWIN"/);
   assert.equal((await call('/api/login', '{"phone":"+886900000000"}')).status, 202); assert.equal(called, true);
 });
@@ -140,6 +141,7 @@ test('desktop mode cannot invoke QR login and renders resolved device metadata',
   assert.equal((await call('/api/login/qr')).status, 409);
   const home = await call('/', undefined, {}, 'GET');
   assert.ok(!/__DEVICE(?:_LABEL|_NOTICE)?__/.test(home.body));
+  assert.ok(!home.body.includes('value="DESKTOPWIN"'));
   assert.match(home.body, /name="lineport-device" content="DESKTOPMAC"/);
 });
 
