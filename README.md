@@ -2,9 +2,9 @@
 
 在 Windows 背景轉送 LINE 與 Telegram 訊息。支援多來源、多目的、指定發訊者、內容篩選及選用的 Discord 文字目的。
 
-v0.8.3 改善 LINE 混合頁面補讀，並顯示每條路線的已處理、新候選與條件排除數，方便排查未轉送原因。161 項模擬測試通過；本次未收件的真機原因仍待確認。[本次更新](docs/RELEASE-0.8.3.md)
+v0.8.4 新增可選的 iPad QR 實驗登入，供需要同時使用官方電腦版 LINE 的使用者選擇；修正聊天室名稱空白，補上名稱左側的群組與好友頭像。214 項自動化測試通過；iPad 模式的解密與轉送仍待實機驗收。[本次更新](docs/RELEASE-0.8.4.md)
 
-[下載 v0.8.3 ZIP](https://github.com/b40609/LinePort/releases/download/v0.8.3/LinePort-v0.8.3.zip) · [更新與 SHA-256](docs/RELEASE-0.8.3.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
+[下載 v0.8.4 ZIP](https://github.com/b40609/LinePort/releases/download/v0.8.4/LinePort-v0.8.4.zip) · [更新與 SHA-256](docs/RELEASE-0.8.4.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
 
 [手機示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-mobile-0.7.jpg)（v0.7.2 歷史畫面；名稱、ID、訊息均為假資料）。
 
@@ -35,7 +35,7 @@ v0.8.3 改善 LINE 混合頁面補讀，並顯示每條路線的已處理、新�
 
 ## 快速開始
 
-在「帳號連結」選擇 LINE 登入身分，依自己需要保留的官方 LINE 裝置決定。**iPad／Windows／Mac 是協定登入身分，不是 LinePort 主機或手機限制。** 目前 LinePort 主機仍只支援 Windows；身分選單與實驗模式位於 `master` 原始碼，既有 v0.8.3 發布 ZIP 尚未包含。
+在「帳號連結」選擇 LINE 登入身分，依自己需要保留的官方 LINE 裝置決定。**iPad／Windows／Mac 是協定登入身分，不是 LinePort 主機或手機限制。** 目前 LinePort 主機仍只支援 Windows；v0.8.4 發布 ZIP 已包含身分選單與 iPad QR 實驗模式。
 
 安裝 [Node.js](https://nodejs.org/)，下載並解壓縮本專案。在專案目錄開啟 PowerShell：
 
