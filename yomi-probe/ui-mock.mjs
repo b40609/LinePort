@@ -2,6 +2,19 @@
 import { EventEmitter } from 'node:events';
 import { createProbeServer } from './server.mjs';
 import { normalizeConfig } from './route-config.mjs';
+import { setTimeout as pause } from 'node:timers/promises';
+import QRCode from 'qrcode';
+
+// Optional synthetic iPad flow: no LINE server or usable login QR is involved.
+const ipadQr = process.argv.includes('--ipad-qr');
+if (ipadQr) process.env.LINEPORT_LINE_DEVICE = 'IOSIPAD';
+const runQrLogin = async (_service, hooks) => {
+  hooks.onQr(await QRCode.toDataURL('LinePort synthetic QR - not a LINE login', { width: 280 }));
+  await pause(8000, undefined, { signal: hooks.signal });
+  hooks.onPin('123456');
+  await pause(8000, undefined, { signal: hooks.signal });
+  hooks.onFinalizing();
+};
 
 const service = new EventEmitter();
 service.e2eeManager = { getSelfKeyByMid: () => ({ synthetic: true }) };
@@ -32,7 +45,7 @@ const telegramFactory = () => ({ getMe: async () => ({ id: 12345, username: 'Lin
 });
 const discordFactory = () => ({ getMe: async () => ({ id: '123456789012345678', username: 'LinePortDemoBot', bot: true }), getChannel: async id => ({ id, type: 0, guild_id: '234567890123456789', name: 'notifications-demo' }) });
 const reviewStore = { list: async () => ({ items: [] }), resolve: async () => { throw new Error('No mock review items'); } };
-const server = createProbeServer({ service, runPwlessLogin: async () => {}, relayController, settingsStore, reviewStore, telegramFactory, discordFactory, port: 18767 });
+const server = createProbeServer({ service, runPwlessLogin: async () => {}, runQrLogin: ipadQr ? runQrLogin : undefined, relayController, settingsStore, reviewStore, telegramFactory, discordFactory, port: 18767 });
 server.listen(18767, '127.0.0.1', () => process.stdout.write('LinePort mock UI: http://127.0.0.1:18767/\n'));
 // Automatic cleanup also protects interrupted verification sessions.
 setTimeout(() => server.close(() => process.exit(0)), 10 * 60 * 1000).unref();

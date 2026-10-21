@@ -4,6 +4,8 @@ param(
     [switch]$Interactive
 )
 $ErrorActionPreference = 'Stop'
+$requestedDevice = if ($env:LINEPORT_LINE_DEVICE) { $env:LINEPORT_LINE_DEVICE } else { 'DESKTOPMAC' }
+if ($requestedDevice -notin @('DESKTOPMAC', 'IOSIPAD')) { throw 'Unsupported LINE device.' }
 if ($Interactive) {
     $SourceName = Read-Host 'Paste full SOURCE group name from the local page'
     $DestinationName = Read-Host 'Paste full DESTINATION group name from the local page'
@@ -14,6 +16,8 @@ $requestedDestination = if ($DestinationName) { $DestinationName } elseif ($env:
 if ($requestedSource -eq $requestedDestination) { throw 'Source and destination must differ.' }
 if ($requestedSource -match '[\r\n\x00]' -or $requestedDestination -match '[\r\n\x00]') { throw 'Invalid group name.' }
 function Confirm-RelayState($relayState) {
+    $runningDevice = if ($relayState.device) { $relayState.device } else { 'DESKTOPMAC' }
+    if ($runningDevice -cne $requestedDevice) { throw 'Different LINE device is running. Stop the relay before switching device.' }
     if ($relayState.app -ne 'line-relay-bridge') { throw 'Port 18766 is occupied by an old or unknown service. Stop the old relay before upgrading.' }
     if ($env:LINEPORT_CONFIG_REVISION) {
         if ($relayState.version -ne 3 -or $relayState.revision -cne $env:LINEPORT_CONFIG_REVISION) { throw 'Different rules are running. Stop the relay before switching rules.' }

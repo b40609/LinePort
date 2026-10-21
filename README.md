@@ -35,6 +35,8 @@ v0.8.3 改善 LINE 混合頁面補讀，並顯示每條路線的已處理、新�
 
 ## 快速開始
 
+需要與官方電腦版 LINE 同時使用，可先試 [iPad 裝置實驗模式](docs/IPAD-EXPERIMENT.md)。單一帳號已確認兩邊可同時登入、官方電腦版收發正常，並通過 LinePort 群組／好友讀取與重啟恢復登入；iPad 模式的訊息解密與轉送仍待驗證。已加入獨立啟動器與資料隔離，預設登入方式保持不變。
+
 安裝 [Node.js](https://nodejs.org/)，下載並解壓縮本專案。在專案目錄開啟 PowerShell：
 
 ```powershell

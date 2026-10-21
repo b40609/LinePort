@@ -19,7 +19,7 @@ test('running with skipped messages shows a warning and clears it after stopping
   const nodes = new Map();
   for (const [, id] of html.matchAll(/id="([^"]+)"/g)) {
     const classes = new Set();
-    nodes.set(id, { value: '', textContent: '', classList: { toggle(name, enabled) { enabled ? classes.add(name) : classes.delete(name); }, contains(name) { return classes.has(name); } } });
+    nodes.set(id, { value: '', textContent: '', removeAttribute(name) { delete this[name]; }, classList: { toggle(name, enabled) { enabled ? classes.add(name) : classes.delete(name); }, contains(name) { return classes.has(name); } } });
   }
   let relay = { phase: 'running', warning: '來源有訊息無法解密', polls: 2, lastRead: { received: 5, eligible: 0, decryptFailed: 1, history: 0, invalidTime: 0 } };
   const context = vm.createContext({

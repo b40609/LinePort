@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { appendRecord, loadJournal, establishBaseline, forwardBatch } from './relay-core.mjs';
 import { localRequest, hardenServer } from './local-http.mjs';
 import { prepareDataDirectory } from './runtime.mjs';
+import { lineDevice } from './line-device.mjs';
 import { guardProtocol } from './protocol-guard.mjs';
 import { inspectRelayRead, requireRelayEncryption } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
@@ -11,6 +12,7 @@ import { runMultiRelay } from './multi-relay.mjs';
 for (const key of ['log', 'warn', 'error', 'debug', 'info', 'trace']) console[key] = () => {};
 const state = { app: 'line-relay-bridge', version: 2, pid: process.pid, phase: 'starting', source: process.env.LINECALL_SOURCE || '來源1', destination: process.env.LINECALL_DESTINATION || '目的2', intervalSeconds: 3, retrySeconds: 0, consecutiveErrors: 0, startedAt: null, polls: 0, forwarded: 0, uncertain: 0, errors: 0, lastPoll: null, stage: 'start' };
 if (process.env.LINEPORT_CONFIG_REVISION) Object.assign(state, { version: 3, revision: process.env.LINEPORT_CONFIG_REVISION });
+state.device = lineDevice().id;
 const server = http.createServer((req, res) => {
   if (!localRequest(req, 18766) || req.url !== '/status' || req.method !== 'GET') { res.writeHead(403); res.end(); return; }
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'", 'Referrer-Policy': 'no-referrer' });

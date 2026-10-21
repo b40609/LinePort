@@ -10,9 +10,32 @@ import { createProbeServer } from './server.mjs';
 import { configRevision, createSettingsStore, normalizeConfig } from './route-config.mjs';
 
 const fakeToken = 'test-only-token';
-async function setup(t, overrides = {}, relayController, settingsStore) {
+test('QR API isolates iPad login, protects its image and cancels while busy', async t => {
+  const before = process.env.LINEPORT_LINE_DEVICE;
+  process.env.LINEPORT_LINE_DEVICE = 'IOSIPAD';
+  t.after(() => { if (before === undefined) delete process.env.LINEPORT_LINE_DEVICE; else process.env.LINEPORT_LINE_DEVICE = before; });
+  let aborted = false;
+  const runner = async (_service, hooks) => {
+    hooks.onQr('data:image/png;base64,synthetic');
+    await new Promise(resolve => hooks.signal.addEventListener('abort', () => { aborted = true; resolve(); }, { once: true }));
+    throw new Error('sensitive upstream payload');
+  };
+  const { call } = await setup(t, {}, { status: async () => ({ phase: 'stopped' }) }, undefined, undefined, runner);
+  assert.equal((await call('/api/login/qr')).status, 202);
+  const status = await call('/api/status', undefined, {}, 'GET');
+  assert.equal(status.headers['cache-control'], 'no-store');
+  assert.match(JSON.parse(status.body).qr, /^data:image/);
+  assert.equal((await call('/api/status', undefined, { 'X-Probe-Token': 'wrong' }, 'GET')).status, 403);
+  assert.equal((await call('/api/login/qr')).status, 409);
+  assert.equal((await call('/api/login/qr/cancel')).status, 202);
+  assert.equal(aborted, true);
+  const after = JSON.parse((await call('/api/status', undefined, {}, 'GET')).body);
+  assert.equal(after.qr, ''); assert.equal(after.connected, false);
+  assert.ok(!after.error.includes('sensitive'));
+});
+async function setup(t, overrides = {}, relayController, settingsStore, runPwlessLogin = async () => {}, runQrLogin) {
   const service = Object.assign(new EventEmitter(), { resumeSession: async () => true, client: { getAllChatMids: async () => ({ memberChats: [] }), getChats: async () => [] } }, overrides);
-  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin: async () => {}, relayController, settingsStore });
+  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin, runQrLogin, relayController, settingsStore });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
@@ -35,8 +58,40 @@ async function setup(t, overrides = {}, relayController, settingsStore) {
     request.end(method === 'GET' ? undefined : value);
     return response;
   }
-  return { call, startRequest };
+  return { call, startRequest, service };
 }
+test('QR finalization rejects cancellation and retains successful login state', async t => {
+  const before = process.env.LINEPORT_LINE_DEVICE;
+  process.env.LINEPORT_LINE_DEVICE = 'IOSIPAD';
+  t.after(() => { if (before === undefined) delete process.env.LINEPORT_LINE_DEVICE; else process.env.LINEPORT_LINE_DEVICE = before; });
+  let release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const runner = async (_service, hooks) => {
+    hooks.onQr('data:image/png;base64,synthetic');
+    hooks.onFinalizing(); entered(); await gate;
+    assert.equal(hooks.signal.aborted, false);
+  };
+  const { call } = await setup(t, {}, { status: async () => ({ phase: 'stopped' }) }, undefined, undefined, runner);
+  assert.equal((await call('/api/login/qr')).status, 202);
+  await started;
+  assert.equal((await call('/api/login/qr/cancel')).status, 409);
+  const pending = JSON.parse((await call('/api/status', undefined, {}, 'GET')).body);
+  assert.equal(pending.qr, ''); assert.equal(pending.pin, ''); assert.equal(pending.busy, true);
+  release(); await new Promise(resolve => setImmediate(resolve));
+  const complete = JSON.parse((await call('/api/status', undefined, {}, 'GET')).body);
+  assert.equal(complete.connected, true); assert.equal(complete.busy, false); assert.equal(complete.qrLogin, false);
+});
+
+test('desktop mode cannot invoke QR login and renders resolved device metadata', async t => {
+  const { call } = await setup(t, {}, undefined, undefined, undefined, () => assert.fail('Unexpected QR login'));
+  assert.equal((await call('/api/login/qr')).status, 409);
+  const home = await call('/', undefined, {}, 'GET');
+  assert.ok(!/__DEVICE(?:_LABEL|_NOTICE)?__/.test(home.body));
+  assert.match(home.body, /name="lineport-device" content="DESKTOPMAC"/);
+});
+
 test('local API enforces Host, Origin, Fetch Metadata and token', async t => {
   const { call } = await setup(t);
   for (const headers of [{ Host: 'evil.example' }, { Origin: 'https://evil.example' }, { 'Sec-Fetch-Site': 'cross-site' }, { 'X-Probe-Token': 'wrong' }]) {
@@ -44,6 +99,37 @@ test('local API enforces Host, Origin, Fetch Metadata and token', async t => {
   }
   assert.equal((await call('/api/status', undefined, {}, 'GET')).status, 200);
 });
+
+test('revoked session clears connected status and permits a fresh login', async t => {
+  const { call, service } = await setup(t, {}, { status: async () => ({ phase: 'stopped' }) });
+  assert.equal((await call('/api/resume')).status, 200);
+  assert.equal(JSON.parse((await call('/api/status', undefined, {}, 'GET')).body).connected, true);
+  service.emit('line:loginRequired');
+  const state = JSON.parse((await call('/api/status', undefined, {}, 'GET')).body);
+  assert.equal(state.connected, false);
+  assert.equal(state.phase, 'login_required');
+  assert.equal((await call('/api/groups')).status, 401);
+  assert.equal((await call('/api/login', JSON.stringify({ phone: '+886900000000' }))).status, 202);
+});
+test('login failure after phone approval exposes only safe diagnostic codes', async t => {
+  const secret = 'SYNTHETIC_TOKEN_NOT_FOR_DISPLAY';
+  const login = async (_service, _phone, _region, hooks) => {
+    hooks.onWaitingBiometric();
+    throw new Error(`loginV2 failed: code=20 msg="${secret}"`);
+  };
+  const { call } = await setup(t, {}, { status: async () => ({ phase: 'stopped' }) }, undefined, login);
+  assert.equal((await call('/api/login', JSON.stringify({ phone: '+886900000000' }))).status, 202);
+  const reply = await call('/api/status', undefined, {}, 'GET');
+  const state = JSON.parse(reply.body);
+  assert.equal(state.phase, 'failed');
+  assert.equal(state.connected, false);
+  assert.equal(state.pin, '');
+  assert.equal(state.loginDiagnostic.stage, 'loginV2');
+  assert.equal(state.loginDiagnostic.lineCode, 20);
+  assert.match(state.error, /LINE code 20/);
+  assert.ok(!reply.body.includes(secret));
+});
+
 test('home has nonce CSP, no-store and no unresolved placeholders', async t => {
   const { call } = await setup(t);
   const result = await call('/', undefined, {}, 'GET');

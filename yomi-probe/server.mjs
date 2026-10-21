@@ -5,6 +5,9 @@ import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { authorized, readJson, localRequest, hardenServer, HttpError } from './local-http.mjs';
 import { prepareDataDirectory } from './runtime.mjs';
+import { lineDevice } from './line-device.mjs';
+import { loginDiagnostic, loginFailureMessage } from './login-diagnostics.mjs';
+import { QrLoginError } from './qr-login.mjs';
 import { guardProtocol } from './protocol-guard.mjs';
 import { createRelayController } from './relay-controller.mjs';
 import { RelayError } from './relay-health.mjs';
@@ -18,10 +21,17 @@ import { recentSenders, lineSourceSenders } from './source-senders.mjs';
 import { createDiscordClient, discordId } from './discord.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-export function createProbeServer({ service, runPwlessLogin, relayController, settingsStore, reviewStore, dataDirectory, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, port = 18765, token = randomBytes(32).toString('hex') }) {
+export function createProbeServer({ service, runPwlessLogin, runQrLogin, relayController, settingsStore, reviewStore, dataDirectory, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, port = 18765, token = randomBytes(32).toString('hex') }) {
 service.on('error', () => {});
-const state = { phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
+const device = lineDevice();
+const state = { device: device.id, phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
 let groups = new Map();
+let qrAbort = null;
+service.on('line:loginRequired', () => {
+  state.connected = false; state.phase = 'login_required'; state.pin = '';
+  state.error = 'LINE 登入已失效，請停止轉送後重新授權；若另一個裝置被登出，請停止共存實驗。';
+  groups.clear();
+});
 let relayAction = '';
 async function requireStopped() {
   if (!relayController || (await relayController.status()).phase !== 'stopped') throw new HttpError(409, '請先停止轉送，再修改規則或平台連結');
@@ -52,8 +62,9 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/') {
       const nonce = randomBytes(16).toString('base64');
-      const html = (await readFile(path.join(root, 'index.html'), 'utf8')).replaceAll('__TOKEN__', token).replaceAll('__NONCE__', nonce);
-      res.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+      const html = (await readFile(path.join(root, 'index.html'), 'utf8')).replaceAll('__TOKEN__', token).replaceAll('__NONCE__', nonce)
+        .replaceAll('__LINE_DEVICE__', device.id).replaceAll('__LINE_DEVICE_LABEL__', device.label).replaceAll('__LINE_DEVICE_NOTICE__', device.notice);
+      res.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
       return send(res, 200, html, 'text/html; charset=utf-8');
     }
     if (!authorized(req, token)) return send(res, 403, { error: '請從本機首頁開啟' });
@@ -71,6 +82,11 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await operation(() => reviewStore.list()));
     }
     if (req.method !== 'POST') return send(res, 404, { error: '找不到操作' });
+    if (req.url === '/api/login/qr/cancel') {
+      if (!qrAbort) return send(res, 409, { error: '目前沒有可取消的 QR 登入' });
+      qrAbort.abort(); state.qr = ''; state.pin = ''; state.phase = 'cancelling';
+      return send(res, 202, { accepted: true });
+    }
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
     const input = await readJson(req, ['/api/rules', '/api/rules/preview', '/api/settings/validate', '/api/settings/restore'].includes(req.url) ? 131072 : 4096);
     // Body streams can overlap. Recheck after awaiting the body, before starting work.
@@ -238,23 +254,46 @@ const server = http.createServer(async (req, res) => {
       void operation(() => relayController.startRules(configRevision(config))).catch(() => {}).finally(() => { relayAction = ''; });
       return send(res, 202, { accepted: true });
     }
-    if (relayController && ['/api/login', '/api/resume'].includes(req.url)) {
+    if (relayController && ['/api/login', '/api/login/qr', '/api/resume'].includes(req.url)) {
       const relay = await relayController.status();
       if (relay.phase !== 'stopped') return send(res, 409, { error: '請先停止轉送，再連結帳號；無法確認狀態時請先排查本機服務' });
       // Status lookup yields to the event loop; another request may have acquired the lock.
       if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
+    }
+    if (req.url === '/api/login/qr') {
+      if (device.id !== 'IOSIPAD' || !runQrLogin) return send(res, 409, { error: '請使用 iPad 實驗啟動器' });
+      if (state.connected) return send(res, 409, { error: '已登入，請直接讀取群組' });
+      const controller = new AbortController(); qrAbort = controller;
+      state.phase = 'logging_in'; state.pin = ''; state.qr = ''; state.qrLogin = true; state.loginDiagnostic = null;
+      void operation(async () => {
+        try {
+          await runQrLogin(service, {
+            signal: controller.signal,
+            onQr: image => { state.qr = image; state.phase = 'waiting_qr'; },
+            onPin: pin => { state.qr = ''; state.pin = pin; state.phase = 'waiting_pin'; },
+            onFinalizing: () => { qrAbort = null; state.qr = ''; state.pin = ''; state.phase = 'logging_in'; },
+          });
+        } catch (error) { throw new RelayError(error instanceof QrLoginError ? error.message : 'iPad QR 實驗：登入失敗，請重新嘗試。'); }
+        state.connected = true; state.phase = 'connected';
+      }).catch(() => { state.phase = 'failed'; }).finally(() => { state.qr = ''; state.pin = ''; state.qrLogin = false; qrAbort = null; });
+      return send(res, 202, { accepted: true });
     }
     if (req.url === '/api/login') {
       if (state.connected) return send(res, 409, { error: '已登入，請直接讀取群組' });
       let phone = String(input.phone || '').replace(/[\s-]/g, '');
       if (/^09\d{8}$/.test(phone)) phone = '+886' + phone.slice(1);
       if (!/^\+[1-9]\d{7,14}$/.test(phone)) return send(res, 400, { error: '請輸入 09 開頭台灣手機號碼或 + 國碼手機號碼' });
-      state.phase = 'logging_in'; state.pin = '';
+      state.phase = 'logging_in'; state.pin = ''; state.loginDiagnostic = null;
       void operation(async () => {
-        await runPwlessLogin(service, phone, 'TW', {
-          onPin: pin => { state.pin = String(pin); state.phase = 'waiting_pin'; },
-          onWaitingBiometric: () => { state.phase = 'waiting_approval'; },
-        });
+        try {
+          await runPwlessLogin(service, phone, 'TW', {
+            onPin: pin => { state.pin = String(pin); state.phase = 'waiting_pin'; },
+            onWaitingBiometric: () => { state.phase = 'waiting_approval'; },
+          });
+        } catch (error) {
+          state.loginDiagnostic = loginDiagnostic(error, state.phase);
+          throw new RelayError(loginFailureMessage(state.loginDiagnostic, device.label));
+        }
         state.connected = true; state.phase = 'connected';
       }).catch(() => { state.phase = 'failed'; }).finally(() => { state.pin = ''; });
       return send(res, 202, { accepted: true });
@@ -262,7 +301,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/resume') {
       await operation(async () => {
         state.connected = Boolean(await service.resumeSession());
-        state.phase = state.connected ? 'connected' : 'idle';
+        state.phase = state.connected ? 'connected' : service.loginRequired ? 'login_required' : 'idle';
       });
       return send(res, 200, { connected: state.connected });
     }
@@ -329,7 +368,8 @@ const { LineClient } = await import('./node_modules/@rikaidev/yomi/dist/line/cli
 guardProtocol(LineClient);
 const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
 const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
-const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir });
+const { runQrLogin } = await import('./qr-login.mjs');
+const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, runQrLogin, relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
 server.listen(18765, '127.0.0.1', () => print('LinePort: http://127.0.0.1:18765/'));
 }
