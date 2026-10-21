@@ -35,7 +35,7 @@ v0.8.3 改善 LINE 混合頁面補讀，並顯示每條路線的已處理、新�
 
 ## 快速開始
 
-需要與官方電腦版 LINE 同時使用，可先試 [iPad 登入身分實驗模式](docs/IPAD-EXPERIMENT.md)。**這是 LINE 協定身分，無需實體 iPad，也不限定 iPhone；目前 LinePort 主機仍只支援 Windows。** 使用理由與驗證範圍見下方說明；此功能位於 `master` 原始碼，既有 v0.8.3 發布 ZIP 尚未包含。
+在「帳號連結」選擇 LINE 登入身分，依自己需要保留的官方 LINE 裝置決定。**iPad／Windows／Mac 是協定登入身分，不是 LinePort 主機或手機限制。** 目前 LinePort 主機仍只支援 Windows；身分選單與實驗模式位於 `master` 原始碼，既有 v0.8.3 發布 ZIP 尚未包含。
 
 安裝 [Node.js](https://nodejs.org/)，下載並解壓縮本專案。在專案目錄開啟 PowerShell：
 
@@ -47,20 +47,32 @@ npm.cmd start
 
 開啟 http://127.0.0.1:18765/：
 
-1. 使用 LINE 時，完成手機授權或恢復登入，按「載入 LINE 群組與好友」。
+1. 使用 LINE 時，在「帳號連結」選身分並按「切換身分並重啟服務」，依該模式完成主要裝置授權／QR 登入或恢復登入，再載入 LINE 群組與好友。
 2. 使用 Telegram 時，在頁面連結並保存自己的 Bot Token，再載入 Bot 聊天室或手動加入 ID。
-3. 選取來源與目的，按住 Ctrl 可多選，按「新增並保存規則」。
+3. 在「轉送規則」新增規則，依序選來源與發訊者、目的與訊息條件，確認預覽後保存。
 4. 按「開始轉送」，等基準完成後，在來源發新文字確認目的收到。
 
 只使用 Telegram 時不必登入 LINE。Telegram 來源是 Bot 可收到的訊息，並非登入個人 Telegram 帳號讀取所有聊天。電腦需保持連網、不休眠。
 
 [安裝教學](docs/INSTALL.md) · [Telegram 權限與設定](docs/USAGE.md#telegram) · [舊版更新](docs/USAGE.md#更新)
 
+## 依工作裝置選擇登入身分
+
+| 使用需求 | LinePort 可選身分 | 登入入口與驗證範圍 |
+| --- | --- | --- |
+| A 用戶工作時需要官方 Windows 電腦版 LINE，同時執行 LinePort | `IOSIPAD`：iPad 身分 | QR Code；單一真實帳號已確認共存及目錄／恢復登入，本模式轉送待驗收 |
+| B 用戶工作時需要官方 iPad LINE，希望 LinePort 使用 Windows 桌面身分 | `DESKTOPWIN`：Windows 桌面身分 | 主要裝置授權；新增實驗選項，真實登入、解密、轉送與 iPad 共存均待驗收 |
+| 沿用既有桌面授權方式 | `DESKTOPMAC`：Mac 桌面身分 | 原有手機授權／保存登入；可能使其他官方電腦版 LINE 登出 |
+
+選擇後按「切換身分並重啟服務」，頁面會自動重新整理。請先保存編輯並停止轉送；操作未完成時不可切換。**各身分的登入、E2EE、平台連結、規則與轉送紀錄分開保存**，切換不會複製憑證、自動登入或啟動轉送。也可使用根目錄的 `啟動iPad實驗模式.cmd`、`啟動Windows實驗模式.cmd` 或原有桌面啟動器。
+
+一般啟動器會重用目前執行中的模式；完全停止後，未指定身分的啟動仍預設 `DESKTOPMAC`。要直接重開實驗模式，請用對應啟動器。不得把 Windows 身分尚未實測的共存能力當作保證；若使用者同時需要保留多台官方裝置，仍須逐組驗收。[選擇方式與相容性矩陣](docs/COMPATIBILITY.md)
+
 ## 為何新增 iPad 登入身分？解決什麼問題？
 
 使用者回報：啟動 LinePort 後，同帳號的官方電腦版 LINE 被強制登出，影響工作。原本 `DESKTOPMAC` 使用桌面登入身分；依症狀推測與官方電腦版的追加裝置登入衝突有關，尚無證據顯示是滑鼠／鍵盤操控權被搶走。LINE 官方也將「於其他追加裝置登入」列為自動登出的可能原因，但未保證任意裝置組合都能共存。[官方登出問題說明](https://help.line.me/line/smartphone/?contentId=50001462&lang=zh-Hant)
 
-本次新增 `IOSIPAD`，讓 LinePort 使用另一種追加裝置登入身分，嘗試保留官方電腦版的登入。這是可選實驗模式，預設仍為原桌面模式；失敗時不自動切回桌面登入，避免再次影響使用者。除了變更身分，也新增符合該身分的 QR／PIN 流程，以及獨立憑證、E2EE 與設定目錄。
+本次新增 `IOSIPAD`，讓 LinePort 使用另一種追加裝置登入身分，嘗試保留官方電腦版的登入。這是為上述 A 用戶新增的選項；B 用戶仍可選 Windows 桌面身分，原 Mac 桌面模式也保留。預設未全面改為 iPad；失敗時不自動切回桌面登入，避免再次影響使用者。除了變更身分，也新增符合該身分的 QR／PIN 流程，以及獨立憑證、E2EE 與設定目錄。
 
 | 問題／能力 | 本次結果 |
 | --- | --- |
@@ -72,7 +84,7 @@ npm.cmd start
 
 軟體設計分開處理 **LinePort 主機作業系統、LINE 主要裝置、LINE 協定登入身分**。`IOSIPAD` 中的 iOS 版本是協定欄位，並非要求使用者手機安裝該版本；同理，`DESKTOPMAC` 不代表只能在 Mac 上執行。官方列出可作主要／追加裝置的多種平台，但官方 App 支援不等於本非官方工具已完成相容性驗證。[LINE 官方裝置說明](https://help.line.me/line/smartphone/sp?contentId=20000132&lang=zh-Hant)
 
-Windows 執行支援目前由 PowerShell 啟動器、ACL 與選用 DPAPI 實作，macOS／Linux 尚未移植。[相容性矩陣與設計原則](docs/COMPATIBILITY.md) · [iPad 操作、排查與完整紀錄](docs/IPAD-EXPERIMENT.md) · [200 項測試與實機驗收範圍](docs/ACCEPTANCE-2026-10-21.md)
+Windows 執行支援目前由 PowerShell 啟動器、ACL 與選用 DPAPI 實作，macOS／Linux 尚未移植。[相容性矩陣與設計原則](docs/COMPATIBILITY.md) · [iPad 操作、排查與完整紀錄](docs/IPAD-EXPERIMENT.md) · [213 項測試與實機驗收範圍](docs/ACCEPTANCE-2026-10-21.md)
 
 ## 運作方式
 

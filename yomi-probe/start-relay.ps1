@@ -5,7 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $requestedDevice = if ($env:LINEPORT_LINE_DEVICE) { $env:LINEPORT_LINE_DEVICE } else { 'DESKTOPMAC' }
-if ($requestedDevice -notin @('DESKTOPMAC', 'IOSIPAD')) { throw 'Unsupported LINE device.' }
+if ($requestedDevice -notin @('DESKTOPWIN', 'DESKTOPMAC', 'IOSIPAD')) { throw 'Unsupported LINE device.' }
 if ($Interactive) {
     $SourceName = Read-Host 'Paste full SOURCE group name from the local page'
     $DestinationName = Read-Host 'Paste full DESTINATION group name from the local page'

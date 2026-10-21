@@ -1,7 +1,7 @@
-param([ValidateSet('DESKTOPMAC', 'IOSIPAD')][string]$Device = 'DESKTOPMAC')
+param([ValidateSet('DESKTOPWIN', 'DESKTOPMAC', 'IOSIPAD')][string]$Device = 'DESKTOPMAC')
 $ErrorActionPreference = 'Stop'
 if (-not $env:LOCALAPPDATA) { throw 'LOCALAPPDATA is required.' }
-$dataName = if ($Device -eq 'IOSIPAD') { 'LineCallYomiProbe-IOSIPAD' } else { 'LineCallYomiProbe' }
+$dataName = if ($Device -eq 'DESKTOPMAC') { 'LineCallYomiProbe' } else { 'LineCallYomiProbe-' + $Device }
 $dataRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA $dataName))
 [void][IO.Directory]::CreateDirectory($dataRoot)
 $rootItem = Get-Item -LiteralPath $dataRoot -Force

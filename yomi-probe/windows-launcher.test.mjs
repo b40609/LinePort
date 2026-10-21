@@ -22,12 +22,16 @@ function Start-Process { param($FilePath) if ($FilePath -ne 'http://127.0.0.1:18
   }
 });
 
-test('launcher refuses a running device mismatch and accepts the iPad marker', { skip: process.platform !== 'win32' }, async () => {
-  const mocks = `function Invoke-WebRequest { [pscustomobject]@{Content='<title>LinePort</title><input id="phone"><meta name="lineport-device" content="IOSIPAD">'} }
+test('launcher reuses the running mode unless an explicit device conflicts', { skip: process.platform !== 'win32' }, async () => {
+  for (const device of ['IOSIPAD', 'DESKTOPWIN']) {
+  const mocks = `function Invoke-WebRequest { [pscustomobject]@{Content='<title>LinePort</title><input id="phone"><meta name="lineport-device" content="${device}">'} }
 function Start-Process { param($FilePath) if ($FilePath -ne 'http://127.0.0.1:18765/') { throw 'Unexpected server launch' }; Write-Output 'opened' }`;
-  await assert.rejects(run(`${mocks}\n& ${quote(path.join(root, 'start.ps1'))}`), /Different LINE device/);
-  const { stdout } = await run(`${mocks}\n& ${quote(path.join(root, 'start.ps1'))} -Device IOSIPAD`);
+  const reused = await run(`${mocks}\n& ${quote(path.join(root, 'start.ps1'))}`);
+  assert.match(reused.stdout, /opened/);
+  await assert.rejects(run(`${mocks}\n& ${quote(path.join(root, 'start.ps1'))} -Device DESKTOPMAC`), /Different LINE device/);
+  const { stdout } = await run(`${mocks}\n& ${quote(path.join(root, 'start.ps1'))} -Device ${device}`);
   assert.match(stdout, /opened/);
+  }
   await assert.rejects(run(`function Invoke-WebRequest { [pscustomobject]@{Content='<title>LinePort</title><input id="phone">'} }
 function Start-Process { throw 'Unexpected launch' }
 & ${quote(path.join(root, 'start.ps1'))} -Device IOSIPAD`), /Different LINE device/);
@@ -80,6 +84,23 @@ function Get-CimInstance { [pscustomobject]@{Name='node.exe';CommandLine=${quote
 function Stop-Process { param($Id,$ErrorAction) if($Id -ne 123) { throw 'Wrong process' }; Write-Output 'verified-stop' }
 & ${stop}`);
   assert.match(stdout, /verified-stop/);
+});
+
+test('UI stop recognizes the unquoted absolute entrypoint used after identity restart', { skip: process.platform !== 'win32' }, async () => {
+  const entry = path.join(root, 'server.mjs');
+  const commandLine = 'C:\\node.exe ' + (/\s/.test(entry) ? '"' + entry + '"' : entry);
+  const mocks = `function Get-NetTCPConnection { param($LocalAddress,$LocalPort,$State,$ErrorAction) if($LocalPort -eq 18765) { [pscustomobject]@{OwningProcess=123} } }
+function Stop-Process { param($Id,$ErrorAction) if($Id -ne 123) { throw 'Wrong process' }; Write-Output 'verified-stop' }`;
+  const stop = quote(path.join(root, 'stop-server.ps1'));
+  const { stdout } = await run(`${mocks}
+function Get-CimInstance { [pscustomobject]@{Name='node.exe';CommandLine=${quote(commandLine)}} }
+& ${stop}`);
+  assert.match(stdout, /verified-stop/);
+  for (const suffix of ['.other', ' --unexpected']) {
+    await assert.rejects(run(`${mocks}
+function Get-CimInstance { [pscustomobject]@{Name='node.exe';CommandLine=${quote(commandLine + suffix)}} }
+& ${stop}`), /another process/);
+  }
 });
 
 test('data protection changes only access rules and is repeatable without admin privileges', { skip: process.platform !== 'win32' }, async () => {

@@ -10,6 +10,8 @@
 
 本次沒有把預設值全面改成 iPad，亦不新增 iPhone 專用限制；目前 LinePort 主機仍只支援 Windows。macOS／Linux 執行支援屬於獨立的主機移植工作，見[相容性矩陣與設計原則](COMPATIBILITY.md)。此模式位於 `master` 原始碼，既有 v0.8.3 發布 ZIP 尚未包含。
 
+帳號連結頁保留三種身分選擇：需要官方電腦版時可選 iPad QR；需要保留官方 iPad 時可測試 Windows 桌面身分（`DESKTOPWIN`，主要裝置授權，真實登入／共存尚未驗收）；原 Mac 桌面身分（`DESKTOPMAC`）也保留。iPad QR 不是所有使用者的唯一入口。
+
 ## 2026-10-21 實測結果
 
 - 使用者完成手機 PIN／授權後，`loginV2` 回傳例外，畫面顯示 `LINE code 0`。本次未完成登入，因此尚未進入共存與轉送驗收。
@@ -27,7 +29,9 @@
 
 ## 啟動與切換
 
-本模式需 [master 原始碼 ZIP](https://github.com/b40609/LinePort/archive/refs/heads/master.zip)或更新後的 Git checkout；發布頁的舊版 ZIP 不含本模式。既有安裝請先完成下列停止步驟，再更新原始碼並於 `yomi-probe` 執行 `npm.cmd ci --ignore-scripts` 安裝鎖定依賴，之後啟動 iPad 模式。
+本模式需 [master 原始碼 ZIP](https://github.com/b40609/LinePort/archive/refs/heads/master.zip)或更新後的 Git checkout；發布頁的舊版 ZIP 不含本模式。新版服務可直接在「帳號連結」選「iPad 身分（QR 實驗）」，先保存編輯及停止轉送，再按「切換身分並重啟服務」並等待頁面重載。切換不會自動登入或啟動轉送；新程序啟用失敗會恢復原服務。
+
+舊服務尚無選單時，先完成下列停止步驟，再更新原始碼並於 `yomi-probe` 執行 `npm.cmd ci --ignore-scripts` 安裝鎖定依賴，之後啟動 iPad 模式。
 
 1. 在舊頁面按「停止轉送」。關閉瀏覽器不會停止背景服務。
 2. 在專案目錄執行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\yomi-probe\stop-server.ps1`。這只停止本專案啟動器建立的介面程序；若是 `npm start` 手動啟動，回原終端按 Ctrl+C。
@@ -44,13 +48,14 @@ $env:LINEPORT_LINE_DEVICE = 'IOSIPAD'
 npm.cmd start
 ```
 
-僅接受 `DESKTOPMAC` 和 `IOSIPAD`。預設仍是桌面模式；同一時間只能執行一種 LinePort 模式，啟動器遇到另一模式會拒絕重用。請從 iPad 模式頁面啟動背景轉送，使子程序繼承相同設定。
+僅接受 `DESKTOPMAC`、`DESKTOPWIN` 和 `IOSIPAD`。未指定時預設仍是原 Mac 桌面身分，同一時間只能執行一種 LinePort 模式。一般啟動器會開啟目前模式；明確指定模式的啟動器遇到另一模式會拒絕重用，請從帳號頁切換。請從 iPad 模式頁面啟動背景轉送，使子程序繼承相同設定。
 
 ## 資料隔離
 
 | 模式 | 資料目錄 |
 | --- | --- |
 | 原桌面模式 | `%LOCALAPPDATA%\LineCallYomiProbe` |
+| Windows 桌面實驗模式 | `%LOCALAPPDATA%\LineCallYomiProbe-DESKTOPWIN` |
 | iPad 實驗模式 | `%LOCALAPPDATA%\LineCallYomiProbe-IOSIPAD` |
 
 登入憑證、登入認證書、E2EE、規則、Bot 設定與轉送紀錄全部分開。不要手動複製登入或 E2EE 檔案。既有規則可使用頁面的設定備份／還原，但不會帶入原本待送與去重進度；先用一條測試規則驗證。資料沿用既有 Windows ACL 保護。
@@ -63,7 +68,7 @@ npm.cmd start
 4. 停止轉送、停止介面，重新啟動 iPad 模式並按「使用已保存的登入」，重複上述檢查。
 5. 若官方電腦版被登出、iPad 授權失敗或無法解密，停止實驗，記錄失敗步驟與畫面狀態。不要反覆在兩端重登。日誌或畫面勿分享憑證與私人訊息。
 
-回原模式：停止轉送和介面，再執行原本的 `啟動一般群組驗證.cmd`；手動執行時將環境變數改成 `DESKTOPMAC`。原資料保留，但 LINE 伺服器是否仍接受原憑證取決於實際登入狀態，必要時需重新授權。
+回原模式：先停止轉送，在帳號頁選 Mac 桌面身分並切換；舊版沒有選單時，停止轉送和介面，再執行原本的 `啟動一般群組驗證.cmd`。手動執行時將環境變數改成 `DESKTOPMAC`。原資料保留，但 LINE 伺服器是否仍接受原憑證取決於實際登入狀態，必要時需重新授權。
 
 ## 實作依據與限制
 
@@ -71,4 +76,4 @@ npm.cmd start
 - [LINE 官方 iPad 登入說明](https://help.line.me/line/IOSSecondary/?contentId=20018574&lang=zh-Hant)提供追加裝置登入流程；不代表官方保證此非官方程式可以共存。
 - 保留 Yomi 0.5.0 的 passwordless、Talk 與 E2EE 流程，另接入 QR 登入；在匯入登入模組前設定共用 `LINE_APP_CONFIG`，涵蓋首次登入、恢復登入、Token 更新及背景服務。沒有修改 `node_modules`，重裝依賴後仍生效。
 - QR 流程要求手機回傳的 E2EE 金鑰可成功匯入，不自行向 LINE 註冊替代金鑰。QR 認證書不與 passwordless 認證書共用。
-- 本機完整測試 200 項通過、0 失敗／跳過。涵蓋 QR 請求與回應欄位、無 nonce 的 QR、30 秒長輪詢與總時間上限、認證書／PIN 分支、工作階段標頭、code 0／4、逾時、立即取消與晚到回應、最終登入禁止取消、拒絕誤用 V3 回應、E2EE JSON 解析與本機 API 存取控制；不能取代真實帳號登入與共存驗收。詳見 [本輪檢查紀錄](ACCEPTANCE-2026-10-21.md)。
+- 本機完整測試 213 項通過、0 失敗／跳過。涵蓋三種身分與資料隔離、切換鎖定／程序重啟／失敗復原及停止工具辨識、QR 請求與回應欄位、無 nonce 的 QR、30 秒長輪詢與總時間上限、認證書／PIN 分支、工作階段標頭、code 0／4、逾時、立即取消與晚到回應、最終登入禁止取消、拒絕誤用 V3 回應、E2EE JSON 解析與本機 API 存取控制；不能取代真實帳號登入與共存驗收。詳見 [本輪檢查紀錄](ACCEPTANCE-2026-10-21.md)。

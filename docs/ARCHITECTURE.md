@@ -4,7 +4,9 @@ v0.6.0 將來源讀取、持久待送與目的發送分開。LINE 使用 Yomi �
 
 ## 服務與介面
 
-LinePort 主機作業系統、授權登入的 LINE 主要裝置與 LINE 協定身分分開處理。`DESKTOPMAC`／`IOSIPAD` 不代表主機或手機的硬體需求；目前主機整合仍限 Windows。iPad 身分是避免影響官方電腦版登入的可選實驗，沒有改變轉送規則格式，也不保證所有裝置組合共存。[相容性矩陣與擴充邊界](COMPATIBILITY.md)
+LinePort 主機作業系統、授權登入的 LINE 主要裝置與 LINE 協定身分分開處理。`DESKTOPMAC`／`DESKTOPWIN`／`IOSIPAD` 不代表主機或手機的硬體需求；目前主機整合仍限 Windows。需要保留官方電腦版時可選 iPad 身分，需要保留官方 iPad 時可測試 Windows 桌面身分；後者真實登入與共存尚待驗收。[相容性矩陣與擴充邊界](COMPATIBILITY.md)
+
+「帳號連結」頁呼叫受本機 Token 保護的 `/api/device`，要求轉送停止且無其他操作。`device-restart.mjs` 先準備獨立子程序，再釋放舊監聽埠、啟用新服務；失敗恢復舊服務。新程序使用所選身分的獨立資料目錄，不移轉憑證、自動登入或啟動轉送，頁面重載取得新的本機 Token。一般啟動器重用目前模式；完全停止後未指定身分仍預設 `DESKTOPMAC`。
 
 ```mermaid
 flowchart TD

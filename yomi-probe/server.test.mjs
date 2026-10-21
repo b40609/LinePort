@@ -10,6 +10,57 @@ import { createProbeServer } from './server.mjs';
 import { configRevision, createSettingsStore, normalizeConfig } from './route-config.mjs';
 
 const fakeToken = 'test-only-token';
+test('identity switch validates input, requires stopped relay and protects the API', async t => {
+  let prepared = 0;
+  const { call } = await setup(t, {}, { status: async () => ({ phase: 'running' }) }, undefined, undefined, undefined, async () => { prepared++; });
+  assert.equal((await call('/api/device', '{"device":"IOSIPAD"}', { 'X-Probe-Token': 'wrong' })).status, 403);
+  for (const value of [{}, { device: '__proto__' }, { device: 1 }]) assert.equal((await call('/api/device', JSON.stringify(value))).status, 400);
+  assert.equal((await call('/api/device', '{"device":"IOSIPAD"}')).status, 409);
+  assert.equal(prepared, 0);
+});
+
+test('identity switch locks operations during preparation and reports failures safely', async t => {
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  t.after(() => release());
+  const { call } = await setup(t, {}, { status: async () => ({ phase: 'stopped' }) }, undefined, undefined, undefined, async () => { entered(); await gate; throw new Error('private details'); });
+  const first = call('/api/device', '{"device":"IOSIPAD"}'); await started;
+  assert.equal((await call('/api/device', '{"device":"DESKTOPWIN"}')).status, 409);
+  assert.equal((await call('/api/resume')).status, 409);
+  release(); const failed = await first;
+  assert.equal(failed.status, 503); assert.ok(!failed.body.includes('private'));
+  assert.equal(JSON.parse((await call('/api/status', undefined, {}, 'GET')).body).busy, false);
+});
+
+test('switch acknowledges the selected identity before activating replacement', async t => {
+  let activated = false, target;
+  const { call } = await setup(t, {}, { status: async () => ({ phase: 'stopped' }) }, undefined, undefined, undefined, async id => {
+    target = id; return { cancel() { assert.fail('Unexpected cancellation'); }, async activate() { activated = true; } };
+  });
+  const response = await call('/api/device', '{"device":"DESKTOPWIN"}');
+  assert.equal(response.status, 202); assert.equal(response.headers.connection, 'close');
+  assert.equal(JSON.parse(response.body).device, 'DESKTOPWIN'); assert.equal(target, 'DESKTOPWIN'); assert.equal(activated, true);
+});
+
+test('iPad rejects the known incompatible passwordless flow', async t => {
+  const before = process.env.LINEPORT_LINE_DEVICE; process.env.LINEPORT_LINE_DEVICE = 'IOSIPAD';
+  t.after(() => { if (before === undefined) delete process.env.LINEPORT_LINE_DEVICE; else process.env.LINEPORT_LINE_DEVICE = before; });
+  const { call } = await setup(t, {}, undefined, undefined, () => assert.fail('Unexpected passwordless login'));
+  assert.equal((await call('/api/login', '{"phone":"+886900000000"}')).status, 409);
+});
+
+test('Windows identity retains authorization login and exposes every identity choice', async t => {
+  const before = process.env.LINEPORT_LINE_DEVICE; process.env.LINEPORT_LINE_DEVICE = 'DESKTOPWIN';
+  t.after(() => { if (before === undefined) delete process.env.LINEPORT_LINE_DEVICE; else process.env.LINEPORT_LINE_DEVICE = before; });
+  let called = false;
+  const { call } = await setup(t, {}, { status: async () => ({ phase: 'stopped' }) }, undefined, async () => { called = true; });
+  const home = await call('/', undefined, {}, 'GET');
+  for (const identity of ['DESKTOPWIN', 'DESKTOPMAC', 'IOSIPAD']) assert.ok(home.body.includes('value="'+identity+'"'));
+  assert.match(home.body, /name="lineport-device" content="DESKTOPWIN"/);
+  assert.equal((await call('/api/login', '{"phone":"+886900000000"}')).status, 202); assert.equal(called, true);
+});
+
 test('QR API isolates iPad login, protects its image and cancels while busy', async t => {
   const before = process.env.LINEPORT_LINE_DEVICE;
   process.env.LINEPORT_LINE_DEVICE = 'IOSIPAD';
@@ -33,9 +84,9 @@ test('QR API isolates iPad login, protects its image and cancels while busy', as
   assert.equal(after.qr, ''); assert.equal(after.connected, false);
   assert.ok(!after.error.includes('sensitive'));
 });
-async function setup(t, overrides = {}, relayController, settingsStore, runPwlessLogin = async () => {}, runQrLogin) {
+async function setup(t, overrides = {}, relayController, settingsStore, runPwlessLogin = async () => {}, runQrLogin, prepareRestart) {
   const service = Object.assign(new EventEmitter(), { resumeSession: async () => true, client: { getAllChatMids: async () => ({ memberChats: [] }), getChats: async () => [] } }, overrides);
-  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin, runQrLogin, relayController, settingsStore });
+  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin, runQrLogin, prepareRestart, relayController, settingsStore });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));

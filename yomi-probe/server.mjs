@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { authorized, readJson, localRequest, hardenServer, HttpError } from './local-http.mjs';
 import { prepareDataDirectory } from './runtime.mjs';
 import { lineDevice } from './line-device.mjs';
+import { prepareDeviceRestart, stagedListen } from './device-restart.mjs';
 import { loginDiagnostic, loginFailureMessage } from './login-diagnostics.mjs';
 import { QrLoginError } from './qr-login.mjs';
 import { guardProtocol } from './protocol-guard.mjs';
@@ -21,7 +22,7 @@ import { recentSenders, lineSourceSenders } from './source-senders.mjs';
 import { createDiscordClient, discordId } from './discord.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-export function createProbeServer({ service, runPwlessLogin, runQrLogin, relayController, settingsStore, reviewStore, dataDirectory, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, port = 18765, token = randomBytes(32).toString('hex') }) {
+export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, relayController, settingsStore, reviewStore, dataDirectory, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, port = 18765, token = randomBytes(32).toString('hex') }) {
 service.on('error', () => {});
 const device = lineDevice();
 const state = { device: device.id, phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
@@ -91,6 +92,30 @@ const server = http.createServer(async (req, res) => {
     const input = await readJson(req, ['/api/rules', '/api/rules/preview', '/api/settings/validate', '/api/settings/restore'].includes(req.url) ? 131072 : 4096);
     // Body streams can overlap. Recheck after awaiting the body, before starting work.
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
+    if (req.url === '/api/device') {
+      let target;
+      try { target = lineDevice(input.device); } catch { throw new HttpError(400, '請選擇有效的 LINE 登入身分'); }
+      if (typeof input.device !== 'string') throw new HttpError(400, '請選擇 LINE 登入身分');
+      if (target.id === device.id) return send(res, 200, { device: device.id, unchanged: true });
+      if (!prepareRestart) throw new HttpError(503, '此環境無法從頁面切換，請使用對應模式的啟動器');
+      await requireStopped();
+      if (state.busy) throw new HttpError(409, '前一個操作尚未完成');
+      state.busy = true; state.error = '';
+      let replacement;
+      try { replacement = await prepareRestart(target.id); }
+      catch { state.busy = false; throw new HttpError(503, '新模式初始化失敗；原模式保留，請檢查資料權限與依賴'); }
+      if (res.destroyed) { replacement.cancel(); state.busy = false; return; }
+      let started = false;
+      res.once('close', () => { if (!started) { replacement.cancel(); state.busy = false; } });
+      res.once('finish', () => {
+        started = true;
+        void replacement.activate(server).then(onRestarted).catch(() => {
+          state.error = '切換失敗，已恢復原模式；請重新整理後重試'; state.busy = false;
+        });
+      });
+      res.setHeader('Connection', 'close');
+      return send(res, 202, { device: target.id, restarting: true });
+    }
     if (req.url === '/api/rules/preview') return send(res, 200, previewRules(input));
     if (req.url === '/api/storage/archive' && dataDirectory) {
       await requireStopped();
@@ -279,6 +304,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 202, { accepted: true });
     }
     if (req.url === '/api/login') {
+      if (device.id === 'IOSIPAD') return send(res, 409, { error: 'iPad 身分請使用 QR Code 登入' });
       if (state.connected) return send(res, 409, { error: '已登入，請直接讀取群組' });
       let phone = String(input.phone || '').replace(/[\s-]/g, '');
       if (/^09\d{8}$/.test(phone)) phone = '+886' + phone.slice(1);
@@ -357,6 +383,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 404, { error: '找不到操作' });
   } catch (error) { send(res, error instanceof HttpError ? error.status : 500, { error: error instanceof HttpError ? error.message : failure(error) }); }
 });
+server.lineportPort = port;
 return hardenServer(server);
 }
 
@@ -369,9 +396,10 @@ guardProtocol(LineClient);
 const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
 const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
 const { runQrLogin } = await import('./qr-login.mjs');
-const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, runQrLogin, relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir });
+const server = createProbeServer({ service: new LineProtocolService(), runPwlessLogin, runQrLogin, prepareRestart: prepareDeviceRestart, onRestarted: () => process.exit(0), relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
-server.listen(18765, '127.0.0.1', () => print('LinePort: http://127.0.0.1:18765/'));
+await stagedListen(server, lineDevice().id);
+print('LinePort: http://127.0.0.1:18765/');
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(() => { process.stderr.write('Startup failed; check data permissions and dependencies.\n'); process.exitCode = 1; });

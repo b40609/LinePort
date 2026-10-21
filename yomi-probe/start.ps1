@@ -1,9 +1,10 @@
-param([ValidateSet('DESKTOPMAC', 'IOSIPAD')][string]$Device = 'DESKTOPMAC')
+﻿param([ValidateSet('DESKTOPWIN', 'DESKTOPMAC', 'IOSIPAD')][string]$Device = 'DESKTOPMAC')
 $ErrorActionPreference = 'Stop'
+$explicitDevice = $PSBoundParameters.ContainsKey('Device')
 function Confirm-ProbeDevice($html) {
     $runningDevice = 'DESKTOPMAC'
     if ($html -match '<meta name="lineport-device" content="([A-Z]+)">') { $runningDevice = $Matches[1] }
-    if ($runningDevice -cne $Device) { throw 'Different LINE device is running. Stop relay, run yomi-probe/stop-server.ps1, then launch the selected mode again.' }
+    if ($explicitDevice -and $runningDevice -cne $Device) { throw 'Different LINE device is running. Use Account Linking in the running app to switch identity, or stop relay and run yomi-probe/stop-server.ps1 before launching again.' }
 }
 $probeUrl = 'http://127.0.0.1:18765/'
 $probeReady = $false

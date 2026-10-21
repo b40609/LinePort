@@ -16,11 +16,12 @@ test('device allowlist rejects unknown identities and separates data roots', () 
   assert.throws(() => lineDevice('__proto__'), /Unsupported/);
   assert.equal(lineDevice('DESKTOPMAC').directory, 'LineCallYomiProbe');
   assert.equal(lineDevice('IOSIPAD').directory, 'LineCallYomiProbe-IOSIPAD');
+  assert.equal(lineDevice('DESKTOPWIN').directory, 'LineCallYomiProbe-DESKTOPWIN');
 });
 
 // Exercise the real vendored login, resume and refresh transport in fresh processes.
 // All HTTPS requests are intercepted before any LINE module is loaded.
-for (const device of ['DESKTOPMAC', 'IOSIPAD']) {
+for (const device of ['DESKTOPWIN', 'DESKTOPMAC', 'IOSIPAD']) {
   test(`${device} login, restored session and refresh use the same device headers offline`, async () => {
     const temporary = await mkdtemp(path.join(os.tmpdir(), 'lineport-device-'));
     const script = `
@@ -38,7 +39,7 @@ for (const device of ['DESKTOPMAC', 'IOSIPAD']) {
       const { configureLineDevice } = await import('./line-device.mjs');
       const profile = await configureLineDevice();
       const { LINE_APP_CONFIG } = await import('./node_modules/@rikaidev/yomi/dist/line/core/config.js');
-      const expected = profile.id === 'IOSIPAD' ? 'IOSIPAD\\t26.7.2\\tiOS\\t18.0' : LINE_APP_CONFIG.lineApp;
+      const expected = profile.id === 'DESKTOPWIN' ? 'DESKTOPWIN\\t9.7.0.3556\\tWINDOWS\\t10.0.0-NT-x64' : profile.id === 'IOSIPAD' ? 'IOSIPAD\\t26.7.2\\tiOS\\t18.0' : LINE_APP_CONFIG.lineApp;
       assert.ok(expected.startsWith(profile.id + '\\t'));
       const { LinePwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/line/auth/pwless/index.js');
       const login = new LinePwlessLogin();
@@ -71,7 +72,7 @@ for (const device of ['DESKTOPMAC', 'IOSIPAD']) {
   });
 }
 
-test('iPad runtime uses a protected isolated directory and leaves desktop data untouched', { skip: process.platform !== 'win32' }, async () => {
+for (const device of ['IOSIPAD', 'DESKTOPWIN']) test(`${device} runtime uses a protected isolated directory and leaves desktop data untouched`, { skip: process.platform !== 'win32' }, async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'lineport-ipad-runtime-'));
   const { stdout } = await execute(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
@@ -82,14 +83,14 @@ test('iPad runtime uses a protected isolated directory and leaves desktop data u
     await mkdir(desktop);
     await writeFile(path.join(desktop, 'synthetic.txt'), 'unchanged');
     const dir = await prepareDataDirectory();
-    assert.equal(dir, path.join(process.env.LOCALAPPDATA, 'LineCallYomiProbe-IOSIPAD'));
+    assert.equal(dir, path.join(process.env.LOCALAPPDATA, 'LineCallYomiProbe-' + process.env.LINEPORT_LINE_DEVICE));
     assert.equal(process.env.YOMI_DATA_DIR, dir);
     assert.equal(process.env.YOMI_NO_KEYCHAIN, '1');
     assert.deepEqual(await readdir(dir), []);
     assert.equal(await readFile(path.join(desktop, 'synthetic.txt'), 'utf8'), 'unchanged');
     const { LINE_APP_CONFIG } = await import('./node_modules/@rikaidev/yomi/dist/line/core/config.js');
-    assert.match(LINE_APP_CONFIG.lineApp, /^IOSIPAD\\t/);
+    assert.ok(LINE_APP_CONFIG.lineApp.startsWith(process.env.LINEPORT_LINE_DEVICE + '\\t'));
     process.stdout.write('runtime-verified');
-  `], { cwd: root, windowsHide: true, timeout: 35000, env: { ...process.env, LOCALAPPDATA: temporary, LINEPORT_LINE_DEVICE: 'IOSIPAD' } });
+  `], { cwd: root, windowsHide: true, timeout: 35000, env: { ...process.env, LOCALAPPDATA: temporary, LINEPORT_LINE_DEVICE: device } });
   assert.match(stdout, /runtime-verified/);
 });
