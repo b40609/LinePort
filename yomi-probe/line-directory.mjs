@@ -1,15 +1,32 @@
+function directoryName(id, ...values) {
+  return values.find(value => typeof value === 'string' && value.trim())?.trim() || id;
+}
+
+export function linePictureUrl(profile) {
+  for (const value of [profile.picturePath, profile.thumbnailUrl, profile.pictureStatus]) {
+    if (typeof value !== 'string' || !value.trim()) continue;
+    const raw = value.trim();
+    if (raw.startsWith('//') || /[\\\s?#]/.test(raw)) continue;
+    try {
+      const url = new URL(raw, 'https://obs.line-scdn.net/');
+      if (url.protocol === 'https:' && url.hostname === 'obs.line-scdn.net' && !url.port && !url.username && !url.password && url.pathname !== '/') return url.href;
+    } catch {}
+  }
+  return '';
+}
+
 export async function lineDirectory(service, { contacts = true } = {}) {
   const directory = await service.client.getAllChatMids();
   const ids = directory.memberChats.filter(id => /^[cr]/.test(id));
   const chats = ids.length ? await service.client.getChats(ids, false) : [];
-  const groups = chats.filter(chat => ids.includes(chat.chatMid)).map(chat => ({ platform: 'line', id: chat.chatMid, name: chat.chatName || chat.chatMid, kind: 'group' }));
+  const groups = chats.filter(chat => ids.includes(chat.chatMid)).map(chat => ({ platform: 'line', id: chat.chatMid, name: directoryName(chat.chatMid, chat.chatName), pictureUrl: linePictureUrl(chat), kind: 'group' }));
   let people = [];
   if (contacts) {
     const mids = (await service.client.getAllContactIds()).filter(id => /^u/.test(id));
     for (let index = 0; index < mids.length; index += 100) {
       const batch = mids.slice(index, index + 100);
       const rows = await service.client.getContacts(batch);
-      people.push(...rows.filter(person => batch.includes(person.mid) && !person.isOfficial).map(person => ({ platform: 'line', id: person.mid, name: person.displayNameOverridden || person.displayName || person.mid, kind: 'person' })));
+      people.push(...rows.filter(person => batch.includes(person.mid) && !person.isOfficial).map(person => ({ platform: 'line', id: person.mid, name: directoryName(person.mid, person.displayNameOverridden, person.displayName), pictureUrl: linePictureUrl(person), kind: 'person' })));
     }
   }
   return [...groups, ...people];

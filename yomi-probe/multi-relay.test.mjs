@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { normalizeConfig, matchingText, createSettingsStore, configRevision } from './route-config.mjs';
 import { createMultiRelay } from './multi-relay.mjs';
-import { readLineSince, lineDirectory } from './line-directory.mjs';
+import { readLineSince, lineDirectory, linePictureUrl } from './line-directory.mjs';
 import { TelegramRateLimit } from './telegram.mjs';
 
 const endpoint = (id, platform = 'line') => ({ platform, id, name: id });
@@ -370,4 +370,17 @@ test('a stalled destination preparation cannot prevent an independent route from
   await relay.tick();
   assert.equal(relay.state.routes[0].phase, 'failed');
   assert.deepEqual(line.calls, [['cgood', 'hello']]);
+});
+
+test('LINE directory preserves names and safe photos with fallback for empty metadata', async () => {
+  const service = { client: {
+    getAllChatMids: async () => ({ memberChats: ['c1'] }),
+    getChats: async () => [{ chatMid: 'c1', chatName: '  工作群組  ', picturePath: '/group-photo' }],
+    getAllContactIds: async () => ['u1', 'u2'],
+    getContacts: async () => [{ mid: 'u1', displayNameOverridden: ' ', displayName: '朋友', pictureStatus: 'friend-photo' }, { mid: 'u2', displayName: ' ' }],
+  } };
+  const rows = await lineDirectory(service);
+  assert.deepEqual(rows.map(row => [row.name, row.pictureUrl]), [['工作群組', 'https://obs.line-scdn.net/group-photo'], ['朋友', 'https://obs.line-scdn.net/friend-photo'], ['u2', '']]);
+  for (const picturePath of ['https://evil.example/a', '//evil.example/a', 'http://obs.line-scdn.net/a', 'https://obs.line-scdn.net:444/a', 'javascript:alert(1)', 'https://user@obs.line-scdn.net/a']) assert.equal(linePictureUrl({ picturePath }), '');
+  assert.equal(linePictureUrl({ picturePath: 'https://evil.example/a', thumbnailUrl: 'https://obs.line-scdn.net/safe' }), 'https://obs.line-scdn.net/safe');
 });

@@ -65,7 +65,7 @@ const server = http.createServer(async (req, res) => {
       const nonce = randomBytes(16).toString('base64');
       const html = (await readFile(path.join(root, 'index.html'), 'utf8')).replaceAll('__TOKEN__', token).replaceAll('__NONCE__', nonce)
         .replaceAll('__LINE_DEVICE__', device.id).replaceAll('__LINE_DEVICE_LABEL__', device.label).replaceAll('__LINE_DEVICE_NOTICE__', device.notice);
-      res.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+      res.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src data: https://obs.line-scdn.net; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
       return send(res, 200, html, 'text/html; charset=utf-8');
     }
     if (!authorized(req, token)) return send(res, 403, { error: '請從本機首頁開啟' });
