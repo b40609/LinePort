@@ -2,9 +2,9 @@
 
 在 Windows 背景轉送 LINE 與 Telegram 訊息。支援多來源、多目的、指定發訊者、內容篩選及選用的 Discord 文字目的。
 
-v0.8.4 新增可選的 iPad QR 實驗登入，供需要同時使用官方電腦版 LINE 的使用者選擇；修正聊天室名稱空白，補上名稱左側的群組與好友頭像。214 項自動化測試通過；iPad 模式的解密與轉送仍待實機驗收。[本次更新](docs/RELEASE-0.8.4.md)
+v0.8.5 改善首次使用流程：依序連結帳號、設定規則、啟動轉送；LINE 聊天室與指定成員自動載入，加入規則刪除與未保存草稿提醒，並統一主要按鈕樣式。219 項自動化測試通過。[本次更新](docs/RELEASE-0.8.5.md)
 
-[下載 v0.8.4 ZIP](https://github.com/b40609/LinePort/releases/download/v0.8.4/LinePort-v0.8.4.zip) · [更新與 SHA-256](docs/RELEASE-0.8.4.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
+[下載 v0.8.5 ZIP](https://github.com/b40609/LinePort/releases/download/v0.8.5/LinePort-v0.8.5.zip) · [更新與 SHA-256](docs/RELEASE-0.8.5.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
 
 [手機示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-mobile-0.7.jpg)（v0.7.2 歷史畫面；名稱、ID、訊息均為假資料）。
 
@@ -35,7 +35,7 @@ v0.8.4 新增可選的 iPad QR 實驗登入，供需要同時使用官方電腦�
 
 ## 快速開始
 
-在「帳號連結」選擇 LINE 登入身分，依自己需要保留的官方 LINE 裝置決定。**iPad／Windows／Mac 是協定登入身分，不是 LinePort 主機或手機限制。** 目前 LinePort 主機仍只支援 Windows；v0.8.4 發布 ZIP 已包含身分選單與 iPad QR 實驗模式。
+在「連結帳號」選擇 LINE 登入身分，依自己需要保留的官方 LINE 裝置決定。**iPad／Windows／Mac 是協定登入身分，不是 LinePort 主機或手機限制。** 目前 LinePort 主機仍只支援 Windows；v0.8.4 發布 ZIP 已包含身分選單與 iPad QR 實驗模式。
 
 安裝 [Node.js](https://nodejs.org/)，下載並解壓縮本專案。在專案目錄開啟 PowerShell：
 
@@ -47,10 +47,10 @@ npm.cmd start
 
 開啟 http://127.0.0.1:18765/：
 
-1. 使用 LINE 時，在「帳號連結」選身分並按「切換身分並重啟服務」，依該模式完成主要裝置授權／QR 登入或恢復登入，再載入 LINE 群組與好友。
+1. 使用 LINE 時，在「連結帳號」選身分並按「切換身分並重啟服務」，依該模式完成主要裝置授權／QR 登入或恢復登入，LINE 群組與好友會自動載入。
 2. 使用 Telegram 時，在頁面連結並保存自己的 Bot Token，再載入 Bot 聊天室或手動加入 ID。
-3. 在「轉送規則」新增規則，依序選來源與發訊者、目的與訊息條件，確認預覽後保存。
-4. 按「開始轉送」，等基準完成後，在來源發新文字確認目的收到。
+3. 在「2. 設定規則」按「＋ 新增規則」，依序選來源與發訊者、目的與訊息條件，確認預覽後保存。
+4. 到「3. 啟動與狀態」按「開始轉送」，等基準完成後，在來源發新文字確認目的收到。
 
 只使用 Telegram 時不必登入 LINE。Telegram 來源是 Bot 可收到的訊息，並非登入個人 Telegram 帳號讀取所有聊天。電腦需保持連網、不休眠。
 
