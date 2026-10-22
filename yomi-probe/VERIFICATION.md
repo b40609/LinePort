@@ -17,6 +17,8 @@ Windows ZIP 解壓後 4,645 檔與建置內容的 SHA-256 全數相符，解壓�
 
 本機紀錄：`%TEMP%/lineport-rc2-source-tests-final.log`、`lineport-rc2-bundled-tests.log`、`lineport-rc2-build-release.log`、`lineport-rc2-installer-build.log`、`lineport-rc2-installer-smoke.log`、`lineport-rc2-archives.log`、`lineport-rc2-github-digests.json`。隔離安裝資料保留於 `%LOCALAPPDATA%/LP-15ef5c53`。桌面 `LineCall/交付檔/LinePort-v1.0.0-rc.2` 的四份交付檔複本雜湊亦已核對。打包未中斷正式服務；完整 Windows 重啟、長時間穩定性、媒體與其他帳號／裝置組合仍未驗證。
 
+16:44–16:46（台灣）發布後唯讀複核：版本頁、`/releases/latest`、`SHA256SUMS.txt` 與 Setup.exe 下載點均 HTTP 200。重新下載 `SHA256SUMS.txt`（303 bytes、`d4bbde956e…`）與原始碼 ZIP（728,414 bytes、`3913070b…`），雜湊與上表一致。遠端 `refs/tags/v1.0.0-rc.2` 為 annotated tag 物件 `649021c3c88aa80735dd1b43be7c931031bcc525`（tagger 2026-10-22T08:33:02Z），指向發布提交 `0ae90910…`；`releases/latest` 仍為 v0.8.7。文件紀錄提交 `4110fab` 已推送，工作區乾淨。複核期間未重啟或變更正式服務（18765／18766 仍自本 checkout 執行、首頁 HTTP 200），亦未重新上傳或修改任何發布資產。
+
 ## 歷史：v1.0.0-rc.2 發布準備
 
 依使用者新要求恢復 EXE 打包與 GitHub 發布。版本、UI、匯出及測試預期已同步 rc.2；原始碼完整 npm test 275 通過、0 失敗／跳過（約 12.38 秒）。安裝版每次使用新版本目錄、保留舊版本，提供不註冊／不建捷徑／不啟動服務的隔離驗證模式。後續套件驗證與發布雜湊另補。
