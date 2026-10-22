@@ -19,6 +19,8 @@ Windows ZIP 解壓後 4,645 檔與建置內容的 SHA-256 全數相符，解壓�
 
 16:44–16:46（台灣）發布後唯讀複核：版本頁、`/releases/latest`、`SHA256SUMS.txt` 與 Setup.exe 下載點均 HTTP 200。重新下載 `SHA256SUMS.txt`（303 bytes、`d4bbde956e…`）與原始碼 ZIP（728,414 bytes、`3913070b…`），雜湊與上表一致。遠端 `refs/tags/v1.0.0-rc.2` 為 annotated tag 物件 `649021c3c88aa80735dd1b43be7c931031bcc525`（tagger 2026-10-22T08:33:02Z），指向發布提交 `0ae90910…`；`releases/latest` 仍為 v0.8.7。文件紀錄提交 `4110fab` 已推送，工作區乾淨。複核期間未重啟或變更正式服務（18765／18766 仍自本 checkout 執行、首頁 HTTP 200），亦未重新上傳或修改任何發布資產。
 
+16:47（台灣）使用者反映 repo 側欄仍顯示 v0.8.7。原因是 GitHub 的 Latest 只取非候選版，`prerelease=true` 時 v0.8.7 維持 Latest。已將 v1.0.0-rc.2 取消候選標記並設為 latest：`/releases/latest` 與側欄均指向 rc.2，`prerelease=false`。版本字串、四份資產、雜湊與 tag 均未變，未驗證項目（完整 Windows 重啟、長時間運作、媒體及其他帳號／裝置組合）亦不變。
+
 ## 歷史：v1.0.0-rc.2 發布準備
 
 依使用者新要求恢復 EXE 打包與 GitHub 發布。版本、UI、匯出及測試預期已同步 rc.2；原始碼完整 npm test 275 通過、0 失敗／跳過（約 12.38 秒）。安裝版每次使用新版本目錄、保留舊版本，提供不註冊／不建捷徑／不啟動服務的隔離驗證模式。後續套件驗證與發布雜湊另補。
