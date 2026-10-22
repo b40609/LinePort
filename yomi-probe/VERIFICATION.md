@@ -1,4 +1,23 @@
-## 2026-10-22：v1.0.0-rc.2 發布準備
+## 2026-10-22：v1.0.0-rc.2 打包、安裝與發布資產驗證
+
+16:39（台灣）公開發布 [v1.0.0-rc.2](https://github.com/b40609/LinePort/releases/tag/v1.0.0-rc.2)，draft=false、prerelease=true；四個資產均已上傳，穩定最新版仍為 v0.8.7。
+
+發布 tag／建置提交：`0ae90910e98e81a3491a78727fad88c882c9c9f7`。Windows PowerShell 5.1 完整打包成功；修正打包腳本 UTF-8 BOM 與 Inno 數值版本欄位，EXE ProductVersion 含相同提交，77 個套件來源檔與提交逐一相符，`--verify-package` exit 0。原始碼及內附 Node.js 的完整測試各 275 通過、0 失敗／跳過；後續只有安裝器中繼資料修改，yomi-probe 來源與鎖檔未變。
+
+實際啟動器在隔離 fixture 派送成功並選用內附 runtime PATH。Inno Setup 6.7.3 安裝版編譯成功；不註冊、不建立捷徑、不啟動服務的隔離測試通過：rc.1 升級、同版修復使用另一新目錄、兩份安裝內容全部 4,645 檔逐一雜湊相符、兩份 EXE 完整性檢查 exit 0、舊版本標記保留、已有 9.0.0 時拒絕降版且不變更版本紀錄。初次測試使用過長暫存路徑，安裝失敗並回復；改用接近預設長度且含空白的隔離路徑後通過。建議保留預設安裝路徑，自訂過長路徑仍可能受 Windows 限制。
+
+Windows ZIP 解壓後 4,645 檔與建置內容的 SHA-256 全數相符，解壓後 EXE 完整性檢查 exit 0；原始碼 ZIP 由發布提交 git archive 產生，清單與該提交相符。四個 GitHub 草稿資產大小及 SHA-256 digest 與本機逐一相符：
+
+| 資產 | bytes | SHA-256 |
+| --- | ---: | --- |
+| Windows x64 Setup.exe | 165687099 | c7da757e735e22ed07e7e62f1cd904c6f22b25c3cab9776bbd9dbaad8d2365c7 |
+| Windows x64 ZIP | 253921655 | 5b7ada5abda5107e62ae4a7b0bfe21880cf7763e163b3cbd17b5a0505a6f6554 |
+| 原始碼 ZIP | 728414 | 3913070b8fa4190bd11d57a5facc51ed9af975990babc134c3562787f212a9e1 |
+| SHA256SUMS.txt | 303 | d4bbde956ecdc76812d088c71eb977aec04d93db65ac6effad00f309c1c4809f |
+
+本機紀錄：`%TEMP%/lineport-rc2-source-tests-final.log`、`lineport-rc2-bundled-tests.log`、`lineport-rc2-build-release.log`、`lineport-rc2-installer-build.log`、`lineport-rc2-installer-smoke.log`、`lineport-rc2-archives.log`、`lineport-rc2-github-digests.json`。隔離安裝資料保留於 `%LOCALAPPDATA%/LP-15ef5c53`。桌面 `LineCall/交付檔/LinePort-v1.0.0-rc.2` 的四份交付檔複本雜湊亦已核對。打包未中斷正式服務；完整 Windows 重啟、長時間穩定性、媒體與其他帳號／裝置組合仍未驗證。
+
+## 歷史：v1.0.0-rc.2 發布準備
 
 依使用者新要求恢復 EXE 打包與 GitHub 發布。版本、UI、匯出及測試預期已同步 rc.2；原始碼完整 npm test 275 通過、0 失敗／跳過（約 12.38 秒）。安裝版每次使用新版本目錄、保留舊版本，提供不註冊／不建捷徑／不啟動服務的隔離驗證模式。後續套件驗證與發布雜湊另補。
 
