@@ -16,7 +16,8 @@ if ($verify.ExitCode -ne 0) { throw 'Payload is incomplete.' }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $output | Out-Null
 [IO.File]::WriteAllText((Join-Path $output 'installed-version.txt'), $version, [Text.Encoding]::ASCII)
-& $compiler "/DPayloadRoot=$payload" "/DAppVersion=$version" "/DReleaseDirectory=$output" (Join-Path $root 'installer/LinePort.iss')
+$fileVersion = ($version -split '-')[0] + '.0'
+& $compiler "/DPayloadRoot=$payload" "/DAppVersion=$version" "/DAppFileVersion=$fileVersion" "/DReleaseDirectory=$output" (Join-Path $root 'installer/LinePort.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
 $installer = Join-Path $output "LinePort-v$version-Windows-x64-Setup.exe"
 if (!(Test-Path -LiteralPath $installer)) { throw 'Installer output missing.' }

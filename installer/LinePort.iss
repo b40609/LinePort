@@ -7,6 +7,9 @@
 #ifndef ReleaseDirectory
   #error ReleaseDirectory is required
 #endif
+#ifndef AppFileVersion
+  #error AppFileVersion is required
+#endif
 
 [Setup]
 AppId={{DA31D331-3AE0-4F53-A12A-E89EEB54DF49}
@@ -35,8 +38,9 @@ RestartApplications=no
 Uninstallable=not IsSmokeTest
 CreateUninstallRegKey=not IsSmokeTest
 UninstallDisplayIcon={code:GetPayloadDirectory}\LinePort.exe
-VersionInfoVersion=1.0.0.0
-VersionInfoProductVersion={#AppVersion}
+VersionInfoVersion={#AppFileVersion}
+VersionInfoProductVersion={#AppFileVersion}
+VersionInfoProductTextVersion={#AppVersion}
 
 [Languages]
 Name: "zhTW"; MessagesFile: "compiler:Languages\ChineseTraditional.isl"
