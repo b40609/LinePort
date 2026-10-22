@@ -1,3 +1,33 @@
+## 最新：v0.8.6 QR 全流程及多代金鑰修正（2026-10-22）
+
+使用者要求自行完成網路研究及修復驗證，不讓朋友反覆排錯。核對 linejs #195/#197/#211/#229 與 Yomi 議題，未採用會輪替／重新註冊金鑰的繞法。新增 line-e2ee-state.mjs：核對每組 X25519 公私鑰，依 bootstrap 指定 key ID 選發送金鑰，保留全部代數；guardLineSession 整合前景服務及兩種背景轉送入口，核對保存 MID／實際帳號／金鑰歸屬，快取缺漏或損壞可由保存 bootstrap 唯讀恢復。QR 最終請求跨掃碼期限誤判已先重現失敗再修正；completeQrLogin 抽出真實 bootstrap 路徑，核對帳號與持久化讀回一致才報登入成功。
+
+新增 qr-session.test.mjs 14 項，真實 Yomi 協定服務搭配八代合成 keychain、冷恢復、靜默寫入失敗、錯帳號／金鑰；line-adapter.test.mjs 6 項驗證實際 adapter 與核心完整轉送／重啟去重、純群組不依賴好友 API、205 群組分批讀取及撤權阻擋；另補 QR 最終請求期限測試。完整 npm test 251 通過、0 失敗／跳過；覆蓋率工具回報整體 93.61% 行、90.77% 分支（含測試 fixture），依賴 audit 0 已知漏洞。
+
+獨立 18767 本機瀏覽器替身走完 iPad QR／PIN、載入 2 群組及 1 好友、建立保存一條群組規則、開始與停止；畫面運作中、錯誤 0，console warn/error 空。截圖保存在桌面 LineCall/交付檔/LinePort-v0.8.6-mock-verification.jpg。此為介面串接測試，不能當成正式 LINE 傳送證據。沒有讀取真實憑證或發送平台訊息，朋友故障實際根因仍未由其不完整診斷證實。新版交付包另記錄於下方；較舊 230 測試包保留但不應作為本輪交付。
+
+本輪正式交付：`C:\Users\user\Desktop\LineCall\交付檔\LinePort-v0.8.6-verified-fixes-20261022-140703.zip`，134 項、674039 bytes；SHA-256 `9f0a540c5d6ebeff0256ededcd200a3ae112e00ee5d92f744f85884172a077b4`，旁存 .sha256.txt。每項 ZIP 內容已逐一核對來源 SHA-256，排除 HANDOFF、node_modules 與私人資料；根目錄附先讀我-修補說明.md。由交付 ZIP 解壓至新暫存目錄 `C:\Users\user\AppData\Local\Temp\LinePort-v0.8.6-final-verify-2c2eeece994b4c91849d85636dac4fea`，全新 npm ci --ignore-scripts --no-audit --no-fund 安裝 78 packages，完整 npm test 再次 251 通過、0 失敗／跳過（約 7.75 秒）。63 個 MJS 語法檢查及 git diff --check 通過。18767 合成服務已停止；未變更正式服務或保存資料。未提交、推送或發布 GitHub。
+
+## 歷史：v0.8.6 群組 E2EE 實際修正（2026-10-22）
+
+使用者要求直接修復，不接受只交診斷後讓朋友重測。繼續追查並以純合成金鑰重現 Yomi 0.5.0 的實際缺陷：群組 shared key 的 creator 與 receiver 屬於同一帳號、key ID 不同時，deriveAndCacheGroupKey 誤用 receiver 公鑰，目的預檢失敗。新增 yomi-e2ee-compat.mjs，載入時按 creatorKeyId 取建立者公鑰，缺少本機 key 時沿用有 ID 檢查的 peer lookup。只處理固定 URL 且 SHA-256 相符的模組，不改寫 node_modules、不註冊群組金鑰、不降級加密。runtime 在 configureLineDevice／首次 Yomi 載入前安裝 hook，支援同步及舊版 Node 非同步載入方式。
+
+新增 6 項離線測試：原版失敗重現、實際 service 預檢及 sendRelayText 搭配獨立解密、群組／聊天室及不同 payload、序列化後冷載入解密、相同 key／他人 creator、缺 key／錯 ID 拒絕、兩種 loader 及依賴檔不變。完整 npm test 實際 230 通過、0 失敗／跳過。版本、套件鎖定、UI 與匯出均 0.8.6；公開 v0.8.5 下載連結保留，0.8.6 尚未提交、推送或發布。更新說明見 docs/RELEASE-0.8.6.md；第一輪 .5 診斷包已由 .6 實際修補取代。
+
+本輪未讀取真實憑證、未操作正式服務或發送真實訊息。朋友舊診斷缺 stage，不能聲稱此缺陷已被確認是朋友端根因，也不能聲稱實機已修復；已完成可本機重現及驗證的修正。保留同身分登入、規則及轉送紀錄，不要求先清檔或重建。
+
+交付檔：`C:\Users\user\Desktop\LineCall\交付檔\LinePort-v0.8.6-e2ee-fix-20261022-133249.zip`，131 項、665784 bytes；SHA-256 `c608511d3d2618a222d4c98dd245442882ce739b2d783e57f47391c1cf848866`，同名 .sha256.txt 旁存。各 ZIP 項目已逐一和來源核對 SHA-256，排除 HANDOFF、node_modules 及私人執行資料。另從交付 ZIP 解壓至新的暫存目錄，執行 npm ci --ignore-scripts --no-audit --no-fund（78 packages），再跑完整 npm test：230 通過、0 失敗／跳過，確認乾淨安裝的固定依賴也能套用 hash 守衛修正。暫存驗證資料未刪除。
+
+## 歷史：朋友端 iPad QR 轉送初始化失敗診斷（2026-10-22）
+
+朋友使用 iPad QR 登入，截圖 LINE 已連結、單一路線初始化失敗，安全診斷 forwarded 0、polls 0、errors 1；舊診斷缺少 stage，不能判定實際根因。匯出 appVersion 0.8.4 是程式殘留字串，已對齊實際 package／UI 0.8.5，不能據此判定朋友裝錯版本。
+
+多規則初始化逐步記錄 platform、route_identity、destination_e2ee／destination_prepare、baseline、journal；錯誤顯示安全處理提示，控制器、路線畫面與診斷保留白名單 stage，拒絕任意字串。核對 QR 金鑰保存與背景登入載入程式，未找到必然漏存問題；沒有變更加密協定、建立群組金鑰或繞過加密。
+
+224 項自動化測試全通過、0 失敗／跳過，涵蓋目的加密／首次讀取／紀錄寫入故障、其他路線隔離、金鑰就緒後重啟且不重送、HTTP 匯出及 UI 階段呈現；git diff --check 通過。本輪只用合成資料，未讀取真實憑證、操作正式服務或發送真實訊息。版本維持 0.8.5，未提交、推送或發布。另整理本機原始碼診斷包，更新與回報步驟見 [診斷修補說明](docs/DIAGNOSTICS-2026-10-22.md)。
+
+下一步由朋友停止舊服務，載入診斷包後重試，回傳新安全診斷的 route.stage。朋友端故障尚未確認修復，不能以本輪模擬通過代替實機驗收。保留登入、規則及轉送紀錄，勿清空或要求重新建規則。
+
 ## 最新：三種登入身分選擇與切換驗收（2026-10-21）
 
 使用者澄清：A 用戶需要官方 Windows LINE，所以 LinePort 可用 iPad 身分；B 用戶需要官方 iPad LINE，所以 LinePort 應可選 Windows 桌面身分。帳號連結頁現可選 DESKTOPMAC（原有模式）、DESKTOPWIN（新增實驗）及 IOSIPAD（QR 實驗），不依主機／手機品牌自動決定。Windows 採既有主要裝置 passwordless 授權，真實登入、解密、轉送及 iPad 共存均待驗收，沒有實作桌面 QR。

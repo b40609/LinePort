@@ -31,6 +31,19 @@ test('route status explains old scans and new messages rejected by conditions', 
   assert.match(rendered[0], /指定人員、關鍵字與排程/);
 });
 
+test('failed routes show the operation stage and recovery guidance without inventing unknown stages', async () => {
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  const rendered = [];
+  const context = vm.createContext({ Date, $: () => ({ replaceChildren() {}, append(node) { rendered.push(node.textContent); } }), document: { createElement: () => ({}) } });
+  vm.runInContext(html.split('\n').find(line => line.startsWith('function renderRouteStatuses(')), context);
+  const route = { name: 'Test', source: { name: 'Source' }, destination: { name: 'Destination' }, phase: 'failed', stage: 'destination_e2ee', forwarded: 0, pending: 0, uncertain: 0, errors: 1, skipped: 0, warning: '請確認網路並在目的群組發一則新文字' };
+  context.relay = { routes: [route, { ...route, stage: 'unknown' }] };
+  vm.runInContext('renderRouteStatuses(relay)', context);
+  assert.match(rendered[0], /失敗階段：目的聊天室加密準備（destination_e2ee）/);
+  assert.match(rendered[0], /請確認網路並在目的群組發一則新文字/);
+  assert.ok(!rendered[1].includes('失敗階段'));
+});
+
 test('running with skipped messages shows a warning and clears it after stopping', async () => {
   const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
   const nodes = new Map();

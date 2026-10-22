@@ -51,3 +51,15 @@ test('startup errors report the failed relay stage without subprocess output', a
   const controller = createRelayController({ request, run: async () => { throw new Error('SYNTHETIC_SECRET'); } });
   await assert.rejects(controller.start('來源', '目的'), error => /加解密金鑰/.test(error.message) && !error.message.includes('SYNTHETIC_SECRET'));
 });
+
+test('multi-route startup reports the failed operation and status rejects arbitrary stage text', async () => {
+  const request = async () => ({ ok: true, json: async () => ({ app: 'line-relay-bridge', version: 3, phase: 'failed', stage: 'SYNTHETIC_SECRET', routes: [
+    { phase: 'failed', stage: 'destination_e2ee', warning: '目的群組加密準備失敗' }, { stage: 'SYNTHETIC_SECRET' },
+  ] }) });
+  const controller = createRelayController({ request, run: async () => { throw new Error('SYNTHETIC_SECRET'); } });
+  const state = await controller.status();
+  assert.equal(state.stage, 'unknown');
+  assert.equal(state.routes[0].stage, 'destination_e2ee');
+  assert.equal(state.routes[1].stage, 'unknown');
+  await assert.rejects(controller.startRules('a'.repeat(64)), error => /destination_e2ee/.test(error.message) && /目的群組加密/.test(error.message) && !error.message.includes('SYNTHETIC_SECRET'));
+});

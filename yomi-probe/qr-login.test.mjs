@@ -89,6 +89,19 @@ test('finalization disables cancellation before the final login request is sent'
   assert.equal(finalizing, true);
 });
 
+test('a remotely completed login survives the QR waiting deadline and late cancellation', async () => {
+  const f = fixture(), controller = new AbortController();
+  let time = 0;
+  const result = await qrHandshake({ now: () => time, signal: controller.signal,
+    request: async (...args) => {
+      const reply = await f.request(...args);
+      if (args[0] === 'qrCodeLogin') { time = 360001; controller.abort(); }
+      return reply;
+    }, onQr() {}, onPin() {} });
+  assert.equal(result.authToken, 'synthetic-token');
+  assert.equal(f.calls.filter(call => call.method === 'qrCodeLogin').length, 1);
+});
+
 test('legacy QR without nonce or V3 timing uses 30-second long polls', async () => {
   const f = fixture();
   await qrHandshake({ request: f.request, onQr() {}, onPin() {} });

@@ -15,11 +15,17 @@ export function linePictureUrl(profile) {
   return '';
 }
 
-export async function lineDirectory(service, { contacts = true } = {}) {
-  const directory = await service.client.getAllChatMids();
-  const ids = directory.memberChats.filter(id => /^[cr]/.test(id));
-  const chats = ids.length ? await service.client.getChats(ids, false) : [];
-  const groups = chats.filter(chat => ids.includes(chat.chatMid)).map(chat => ({ platform: 'line', id: chat.chatMid, name: directoryName(chat.chatMid, chat.chatName), pictureUrl: linePictureUrl(chat), kind: 'group' }));
+export async function lineDirectory(service, { contacts = true, groups = true } = {}) {
+  const chats = [];
+  if (groups) {
+    const directory = await service.client.getAllChatMids();
+    const ids = [...new Set(directory.memberChats.filter(id => /^[cr]/.test(id)))];
+    for (let index = 0; index < ids.length; index += 100) {
+      const batch = ids.slice(index, index + 100);
+      const rows = await service.client.getChats(batch, false);
+      chats.push(...rows.filter(chat => batch.includes(chat.chatMid)).map(chat => ({ platform: 'line', id: chat.chatMid, name: directoryName(chat.chatMid, chat.chatName), pictureUrl: linePictureUrl(chat), kind: 'group' })));
+    }
+  }
   let people = [];
   if (contacts) {
     const mids = (await service.client.getAllContactIds()).filter(id => /^u/.test(id));
@@ -29,7 +35,7 @@ export async function lineDirectory(service, { contacts = true } = {}) {
       people.push(...rows.filter(person => batch.includes(person.mid) && !person.isOfficial).map(person => ({ platform: 'line', id: person.mid, name: directoryName(person.mid, person.displayNameOverridden, person.displayName), pictureUrl: linePictureUrl(person), kind: 'person' })));
     }
   }
-  return [...groups, ...people];
+  return [...chats, ...people];
 }
 
 export async function readLineSince(service, id, startedAt, known, { maxPages = 20 } = {}) {

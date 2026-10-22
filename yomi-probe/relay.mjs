@@ -6,6 +6,7 @@ import { localRequest, hardenServer } from './local-http.mjs';
 import { prepareDataDirectory } from './runtime.mjs';
 import { lineDevice } from './line-device.mjs';
 import { guardProtocol } from './protocol-guard.mjs';
+import { guardLineSession } from './line-e2ee-state.mjs';
 import { inspectRelayRead, requireRelayEncryption } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
 import { runMultiRelay } from './multi-relay.mjs';
@@ -28,7 +29,7 @@ const { LineClient } = await import('./node_modules/@rikaidev/yomi/dist/line/cli
 guardProtocol(LineClient);
 if (process.env.LINEPORT_CONFIG_REVISION) {
   const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
-  await runMultiRelay(state, dataDir, { createLineService: async () => new LineProtocolService() });
+  await runMultiRelay(state, dataDir, { createLineService: async () => guardLineSession(new LineProtocolService()) });
 } else {
 const routeKey = createHash('sha256').update(JSON.stringify([state.source, state.destination])).digest('hex').slice(0, 24);
 const journal = path.join(dataDir, state.source === '來源1' && state.destination === '目的2'
@@ -39,7 +40,7 @@ const saved = await loadJournal(journal);
 const seen = saved.seen;
 let startedAt = saved.startedAt;
   const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
-  const service = new LineProtocolService();
+  const service = guardLineSession(new LineProtocolService());
   service.on('error', () => {});
   state.stage = 'resume';
   if (!await service.resumeSession()) throw new Error('No session');

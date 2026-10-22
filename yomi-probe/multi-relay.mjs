@@ -4,7 +4,7 @@ import { appendRecord, loadJournal, establishBaseline } from './relay-core.mjs';
 import { unseenText } from './relay-rules.mjs';
 import { createSettingsStore, configRevision, endpointKey, matchingContent, textRejection } from './route-config.mjs';
 import { lineDirectory, readLineSince } from './line-directory.mjs';
-import { requireRelayEncryption, inspectRelayRead, RelayError } from './relay-health.mjs';
+import { requireRelayEncryption, inspectRelayRead, relayFailure, RelayError } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
 import { createTelegramClient, createTelegramInbox, TelegramRateLimit } from './telegram.mjs';
 import { createDiscordClient, DiscordRateLimit } from './discord.mjs';
@@ -56,12 +56,15 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     if (!sources.has(sourceKey)) sources.set(sourceKey, { endpoint: source, edges: [], polls: 0, lastPoll: null, received: 0, decryptFailed: 0, warning: '', failures: 0, retryAt: 0 });
     sources.get(sourceKey).edges.push(edge);
     try {
+      status.stage = 'platform';
       const from = adapters[source.platform], to = adapters[destination.platform];
       if (!from || !to) throw new RelayError(platformErrors[!from ? source.platform : destination.platform] || '此平台尚未連結，請先設定帳號');
       const identity = digest([rule.id, from.identity, sourceKey, to.identity, destinationKey]);
       edge.file = path.join(directory, `lineport-route-${identity}.jsonl`);
       edge.record = row => writeRecord(edge.file, row);
+      status.stage = 'journal';
       const saved = await loadJournal(edge.file);
+      status.stage = 'route_identity';
       if (saved.routeIdentity && saved.routeIdentity !== identity) throw new Error('Invalid identity');
       edge.seen = saved.seen;
       edge.pending = saved.pending;
@@ -70,6 +73,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       cooldowns.set(destination.platform, Math.max(cooldowns.get(destination.platform) || 0, saved.retryAt));
       status.pending = edge.pending.size;
       edge.startedAt = saved.startedAt || now();
+      status.stage = 'journal';
       if (!saved.routeIdentity) await edge.record({ routeIdentity: identity, name: rule.name, source, destination });
       const reviewed = await inspectDelivery(directory, identity);
       const unresolved = reviewed.unresolved;
@@ -80,17 +84,20 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         status.warning = '有發送結果不明的訊息，已暫停此路線；請停止轉送，到人工處理逐筆核對。重啟不會自動重送。';
         continue;
       }
+      status.stage = destination.platform === 'line' ? 'destination_e2ee' : 'destination_prepare';
       if (!preparations.has(destinationKey)) preparations.set(destinationKey, withDeadline(to.prepare(destination.id), operationTimeoutMs));
       await preparations.get(destinationKey);
       if (!saved.startedAt) {
+        status.stage = 'baseline';
         if (!baselines.has(sourceKey)) baselines.set(sourceKey, withDeadline(from.recent(source.id), operationTimeoutMs));
         const baseline = await baselines.get(sourceKey);
+        status.stage = 'journal';
         await establishBaseline({ messages: baseline, startedAt: edge.startedAt, record: edge.record, seen: edge.seen });
       }
       status.phase = 'running'; status.stage = 'waiting';
     } catch (error) {
       status.phase = 'failed'; status.errors++;
-      status.warning = error instanceof RelayError ? error.message : '此路線初始化失敗；請檢查帳號、讀取權限、E2EE 與本機紀錄';
+      status.warning = error instanceof RelayError ? error.message : relayFailure(status.stage);
     }
   }
   if (!edges.length) throw new RelayError('請至少啟用一條轉送規則');
@@ -263,6 +270,33 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
   return { state, tick, sourceKeys: [...sources.keys()] };
 }
 
+export async function createLineRelayAdapter(service, endpoints, { downloadPhoto } = {}) {
+  service.on('error', () => {});
+  if (!await service.resumeSession()) throw new RelayError('LINE 登入已失效，請先重新授權');
+  requireRelayEncryption(service);
+  const line = endpoints.filter(endpoint => endpoint.platform === 'line');
+  const allowed = new Set((await lineDirectory(service, {
+    groups: line.some(endpoint => /^[cr]/.test(endpoint.id)),
+    contacts: line.some(endpoint => /^u/.test(endpoint.id)),
+  })).map(endpoint => endpoint.id));
+  const check = id => {
+    if (service.loginRequired) throw new RelayError('LINE 登入已失效，請停止後重新授權');
+    if (!allowed.has(id)) throw new RelayError('LINE 聊天室已不在群組或好友列表內');
+  };
+  return {
+    identity: `line:${service.profile.mid}`,
+    async prepare(id) { check(id); await prepareRelayDestination(service, id); },
+    async recent(id) { check(id); return service.getRecentMessages(id, 50); },
+    async read(id, time, known) { check(id); return readLineSince(service, id, time, known); },
+    preparePayload: text => typeof text === 'string' ? undefined : downloadPhoto
+      ? downloadPhoto(text) : Promise.reject(new RelayError('Telegram 圖片來源未連結，待送已保留；請重新連結平台')),
+    send(id, text, options = {}) {
+      check(id);
+      return typeof text === 'string' ? sendRelayText(service, id, text, options) : sendLinePhoto(service, id, text, options.prepared, options);
+    },
+  };
+}
+
 export async function runMultiRelay(state, directory, { createLineService }) {
   const store = createSettingsStore(directory), config = await store.load();
   if (configRevision(config) !== process.env.LINEPORT_CONFIG_REVISION) throw new RelayError('規則已變動，請停止後重新啟動');
@@ -277,26 +311,8 @@ export async function runMultiRelay(state, directory, { createLineService }) {
   }
   if (endpoints.some(endpoint => endpoint.platform === 'line')) {
     try {
-      const service = await createLineService();
-      service.on('error', () => {});
-      if (!await service.resumeSession()) throw new RelayError('LINE 登入已失效，請先重新授權');
-      requireRelayEncryption(service);
-      const allowed = new Set((await lineDirectory(service)).map(endpoint => endpoint.id));
-      if (!service.profile?.mid) throw new Error('Missing LINE identity');
-      const check = id => { if (!allowed.has(id)) throw new RelayError('LINE 聊天室已不在群組或好友列表內'); };
-      adapters.line = {
-        identity: `line:${service.profile.mid}`,
-        async prepare(id) { check(id); await prepareRelayDestination(service, id); },
-        async recent(id) { check(id); return service.getRecentMessages(id, 50); },
-        async read(id, time, known) {
-          check(id);
-          if (service.loginRequired) throw new RelayError('LINE 登入已失效，請停止後重新授權');
-          return readLineSince(service, id, time, known);
-        },
-        preparePayload: text => typeof text === 'string' ? undefined : telegramMediaClient
-          ? telegramMediaClient.downloadPhoto(text) : Promise.reject(new RelayError('Telegram 圖片來源未連結，待送已保留；請重新連結平台')),
-        send: (id, text, options) => typeof text === 'string' ? sendRelayText(service, id, text, options) : sendLinePhoto(service, id, text, options.prepared, options),
-      };
+      adapters.line = await createLineRelayAdapter(await createLineService(), endpoints, { downloadPhoto: text => telegramMediaClient
+        ? telegramMediaClient.downloadPhoto(text) : Promise.reject(new RelayError('Telegram 圖片來源未連結，待送已保留；請重新連結平台')) });
     } catch (error) { platformErrors.line = error instanceof RelayError ? error.message : 'LINE 連結失敗，請檢查登入、好友列表與 E2EE 金鑰'; }
   }
   if (endpoints.some(endpoint => endpoint.platform === 'telegram')) {

@@ -2,7 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { relayWarning, relayFailure, RelayError } from './relay-health.mjs';
+import { relayWarning, relayFailure, safeRelayStage, RelayError } from './relay-health.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const execute = promisify(execFile);
@@ -23,6 +23,7 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
         if (state.app !== 'line-relay-bridge') return { phase: 'legacy' };
         // Only expose known, non-credential status fields to the page.
         const safe = Object.fromEntries(['phase', 'stage', 'source', 'destination', 'polls', 'forwarded', 'uncertain', 'errors', 'lastPoll', 'retrySeconds'].map(key => [key, state[key]]));
+        safe.stage = safeRelayStage(state.stage);
         const readCounts = value => Object.fromEntries(['received', 'processed', 'eligible', 'matched', 'filtered', 'decryptFailed', 'invalidTime', 'history'].map(key => [key, Number.isSafeInteger(value?.[key]) && value[key] >= 0 ? value[key] : 0]));
         if (state.lastRead) safe.lastRead = readCounts(state.lastRead);
         safe.warning = relayWarning(safe);
@@ -32,6 +33,7 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
           safe.routes = Array.isArray(state.routes) ? state.routes.slice(0, 100).map(route => ({
             key: String(route.key || '').slice(0, 64), ruleId: String(route.ruleId || '').slice(0, 64), name: String(route.name || '').slice(0, 100),
             source: endpoint(route.source), destination: endpoint(route.destination), phase: String(route.phase || '').slice(0, 30),
+            stage: safeRelayStage(route.stage),
             forwarded: count(route.forwarded), pending: count(route.pending), uncertain: count(route.uncertain), errors: count(route.errors), skipped: count(route.skipped),
             lastSend: typeof route.lastSend === 'string' ? route.lastSend.slice(0, 40) : null, warning: String(route.warning || '').slice(0, 300), replyNotice: String(route.replyNotice || '').slice(0, 200),
             retryAt: count(route.retryAt),
@@ -56,7 +58,12 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
     async startRules(revision) {
       if (!/^[a-f0-9]{64}$/.test(revision)) throw new RelayError('規則版本不正確');
       try { await script('start-relay.ps1', { LINEPORT_CONFIG_REVISION: revision }); }
-      catch { throw new RelayError('多規則轉送啟動失敗；請查看各路線狀態、帳號連結及本機服務'); }
+      catch {
+        const state = await controller.status();
+        const failed = state.routes?.find(route => route.phase === 'failed');
+        throw new RelayError(failed ? `轉送啟動失敗（${failed.stage}）：${failed.warning || relayFailure(failed.stage)}`
+          : state.phase === 'failed' ? relayFailure(state.stage) : '多規則轉送啟動失敗；請查看各路線狀態、帳號連結及本機服務');
+      }
     },
     stop() { return script('stop-relay.ps1'); },
   };

@@ -31,7 +31,9 @@ const stageFailures = {
   route_identity: '帳號或群組與原轉送紀錄不符；請核對設定並保留原紀錄。',
   e2ee_keys: '登入成功，但背景轉送缺少加解密金鑰；請停止轉送，再用手機重新授權。',
   destination_e2ee: '目的群組加密準備失敗；請確認網路，並用官方 LINE 在目的群組發一則新文字後重啟。若仍失敗，停止轉送並重新授權。',
-  baseline: '來源訊息或首次基準讀取失敗；請確認網路、磁碟空間及資料權限。',
+  platform: '此路線的平台尚未就緒；請檢查帳號連結後停止並重新啟動轉送。',
+  destination_prepare: '目的聊天室準備失敗；請確認網路、聊天室成員與平台權限，停止後重試。',
+  baseline: '來源訊息或首次基準讀取失敗；請確認網路、登入狀態及來源聊天室讀取權限。',
   journal: '轉送紀錄無法讀寫或不完整；請保留原紀錄並檢查磁碟與權限。',
   read: '來源訊息連續讀取失敗，轉送已停止；請確認網路與登入狀態。',
   login_required: '背景登入已失效；請停止轉送，再用手機重新授權。',
@@ -41,6 +43,11 @@ const stageFailures = {
 
 export function relayFailure(stage) {
   return stageFailures[stage] || '背景轉送啟動或執行失敗；請檢查本機服務狀態。';
+}
+
+// Only fixed operation names may cross the status/diagnostic boundary.
+export function safeRelayStage(stage) {
+  return typeof stage === 'string' && (Object.hasOwn(stageFailures, stage) || ['start', 'rules', 'waiting', 'prepare'].includes(stage)) ? stage : 'unknown';
 }
 
 export function relayWarning(state) {

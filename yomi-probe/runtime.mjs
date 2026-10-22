@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { lineDevice, configureLineDevice } from './line-device.mjs';
+import { installYomiE2EEFix } from './yomi-e2ee-compat.mjs';
 
 export async function prepareDataDirectory() {
   if (process.platform !== 'win32' || !process.env.LOCALAPPDATA) throw new Error('Windows LOCALAPPDATA is required');
@@ -14,6 +15,7 @@ export async function prepareDataDirectory() {
   await promisify(execFile)(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Device', profile.id], { windowsHide: true, timeout: 30000 });
   process.env.YOMI_DATA_DIR = dataDir;
   process.env.YOMI_NO_KEYCHAIN = '1';
+  installYomiE2EEFix();
   await configureLineDevice(profile.id);
   return dataDir;
 }

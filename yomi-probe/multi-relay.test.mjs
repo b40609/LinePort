@@ -13,6 +13,48 @@ const rule = (id = 'one', sources = [endpoint('csource')], destinations = [endpo
 const config = (...rules) => normalizeConfig({ version: 1, rules });
 const fixture = async () => mkdtemp(path.join(os.tmpdir(), 'lineport-routing-'));
 
+test('startup failures identify destination encryption, source baseline and local journal without leaking errors', async () => {
+  for (const failure of ['destination_e2ee', 'baseline', 'journal']) {
+    const line = adapter();
+    if (failure === 'destination_e2ee') line.prepare = async () => { throw new Error('SYNTHETIC_PRIVATE_KEY_DETAILS'); };
+    if (failure === 'baseline') line.recent = async () => { throw new Error('SYNTHETIC_PRIVATE_SOURCE_DETAILS'); };
+    const relay = await createMultiRelay({ config: config(rule()), adapters: { line }, directory: await fixture(), now: () => 1000,
+      ...(failure === 'journal' ? { writeRecord: async () => { throw new Error('SYNTHETIC_PRIVATE_PATH'); } } : {}) });
+    assert.equal(relay.state.phase, 'failed');
+    assert.equal(relay.state.routes[0].stage, failure);
+    assert.equal(relay.state.routes[0].errors, 1);
+    assert.match(relay.state.routes[0].warning, failure === 'destination_e2ee' ? /目的群組加密/ : failure === 'baseline' ? /首次基準/ : /紀錄無法讀寫/);
+    await relay.tick();
+    assert.equal(line.calls.length, 0);
+    assert.ok(!JSON.stringify(relay.state).includes('SYNTHETIC_PRIVATE'));
+  }
+});
+
+test('a destination encryption failure is isolated and the same route can restart after key readiness', async () => {
+  const directory = await fixture(), line = adapter({ messages: [message('new')] });
+  let ready = false;
+  line.prepare = async id => { if (id === 'cbad' && !ready) throw new Error('missing existing group key'); };
+  const options = { config: config(rule('one', [endpoint('cs')], [endpoint('cbad'), endpoint('cgood')])), adapters: { line }, directory, now: () => 1000, pause: async () => {} };
+  const first = await createMultiRelay(options);
+  await first.tick();
+  assert.equal(first.state.phase, 'degraded');
+  assert.equal(first.state.routes[0].stage, 'destination_e2ee');
+  assert.deepEqual(line.calls.map(([id]) => id), ['cgood']);
+  ready = true;
+  const second = await createMultiRelay(options);
+  await second.tick();
+  assert.equal(second.state.phase, 'running');
+  assert.deepEqual(line.calls.map(([id]) => id), ['cgood', 'cbad']);
+});
+
+test('baseline persistence failures retain journal stage after a successful source read', async () => {
+  let writes = 0;
+  const relay = await createMultiRelay({ config: config(rule()), adapters: { line: adapter() }, directory: await fixture(), now: () => 1000,
+    writeRecord: async () => { if (++writes === 2) throw new Error('SYNTHETIC_PRIVATE_PATH'); } });
+  assert.equal(relay.state.routes[0].stage, 'journal');
+  assert.match(relay.state.routes[0].warning, /紀錄無法讀寫/);
+});
+
 test('durable pending payload survives restart even when the source is unavailable', async () => {
   const directory = await fixture(), value = config(rule());
   const line = adapter({ messages: [message('a', 'first'), message('b', 'second')] });

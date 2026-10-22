@@ -33,10 +33,13 @@ test('preview independently reports Telegram size limits and rejects invalid rul
 });
 test('diagnostics allowlists counts and phases, excluding secrets, identity, text and errors', () => {
   const secret = 'SYNTHETIC_PRIVATE_DATA';
-  const result = safeDiagnostics({ phase: 'running', token: secret, warning: secret, forwarded: 1, errors: -1,
-    routes: [{ name: secret, source: { id: secret }, text: secret, phase: secret, pending: 3, warning: secret }] }, true);
+  const result = safeDiagnostics({ phase: 'running', stage: secret, token: secret, warning: secret, forwarded: 1, errors: -1,
+    routes: [{ name: secret, source: { id: secret }, text: secret, phase: secret, stage: secret, pending: 3, warning: secret }, { phase: 'failed', stage: 'destination_e2ee' }] }, true);
   assert.ok(!JSON.stringify(result).includes(secret));
-  assert.equal(result.appVersion, '0.8.4');
+  assert.equal(result.appVersion, '0.8.6');
+  assert.equal(result.stage, 'unknown');
+  assert.equal(result.routes[0].stage, 'unknown');
+  assert.equal(result.routes[1].stage, 'destination_e2ee');
   assert.equal(result.routes[0].pending, 3);
   assert.equal(result.routes[0].phase, 'unavailable');
   assert.equal(result.totals.errors, 0);
@@ -44,7 +47,7 @@ test('diagnostics allowlists counts and phases, excluding secrets, identity, tex
 test('settings export strips unknown credentials and validates format and cycles', () => {
   const value = config(); value.token = 'SYNTHETIC_SECRET'; value.rules[0].token = 'SYNTHETIC_SECRET';
   const backup = settingsBackup(value);
-  assert.equal(backup.appVersion, '0.8.4');
+  assert.equal(backup.appVersion, '0.8.6');
   assert.ok(!JSON.stringify(backup).includes('SYNTHETIC_SECRET'));
   assert.deepEqual(validateBackup(backup), config());
   assert.throws(() => validateBackup({ ...backup, version: 2 }), /格式/);
