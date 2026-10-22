@@ -15,6 +15,7 @@ import { guardLineSession } from './line-e2ee-state.mjs';
 import { createRelayController } from './relay-controller.mjs';
 import { RelayError } from './relay-health.mjs';
 import { normalizeConfig, configRevision, createSettingsStore } from './route-config.mjs';
+import { createAutostartStore, applyAutostartShortcuts, seedFromInstallerTask } from './autostart.mjs';
 import { lineDirectory } from './line-directory.mjs';
 import { createTelegramClient, createTelegramInbox, telegramMessage } from './telegram.mjs';
 import { previewRules, settingsBackup, validateBackup, safeDiagnostics } from './user-tools.mjs';
@@ -24,7 +25,7 @@ import { recentSenders, lineSourceSenders } from './source-senders.mjs';
 import { createDiscordClient, discordId } from './discord.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, relayController, settingsStore, reviewStore, dataDirectory, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, port = 18765, token = randomBytes(32).toString('hex') }) {
+export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, relayController, settingsStore, reviewStore, dataDirectory, autostartStore, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, port = 18765, token = randomBytes(32).toString('hex') }) {
 service.on('error', () => {});
 const device = lineDevice();
 const state = { device: device.id, phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
@@ -75,8 +76,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/api/relay/status') return send(res, 200, { ...(relayController ? await relayController.status() : { phase: 'unavailable' }), action: relayAction });
     if (req.method === 'GET' && req.url === '/api/rules' && settingsStore) {
       const config = await settingsStore.load();
-      return send(res, 200, { config, revision: configRevision(config), telegramConfigured: Boolean(await settingsStore.telegramToken()), telegramProtected: Boolean(await settingsStore.telegramProtected?.()), discordConfigured: Boolean(await settingsStore.discordToken?.()), discordProtected: Boolean(await settingsStore.discordProtected?.()) });
+      return send(res, 200, { config, revision: configRevision(config), telegramConfigured: Boolean(await settingsStore.telegramToken()), telegramProtected: Boolean(await settingsStore.telegramProtected?.()), discordConfigured: Boolean(await settingsStore.discordToken?.()), discordProtected: Boolean(await settingsStore.discordProtected?.()), autostart: autostartStore ? await autostartStore.load() : null });
     }
+    if (req.method === 'GET' && req.url === '/api/autostart' && autostartStore) return send(res, 200, { autostart: await autostartStore.load() });
     if (req.method === 'GET' && req.url === '/api/settings/backup' && settingsStore) return send(res, 200, settingsBackup(await settingsStore.load()));
     if (req.method === 'GET' && req.url === '/api/diagnostics') return send(res, 200, safeDiagnostics(relayController ? await relayController.status() : {}, state.connected));
     if (req.method === 'GET' && req.url === '/api/storage' && dataDirectory) return send(res, 200, await storageHealth(dataDirectory));
@@ -94,6 +96,14 @@ const server = http.createServer(async (req, res) => {
     const input = await readJson(req, ['/api/rules', '/api/rules/preview', '/api/settings/validate', '/api/settings/restore'].includes(req.url) ? 131072 : 4096);
     // Body streams can overlap. Recheck after awaiting the body, before starting work.
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
+    if (req.url === '/api/autostart') {
+      if (!autostartStore) return send(res, 404, { error: '找不到操作' });
+      const enabled = await autostartStore.save(input);
+      let shortcuts;
+      try { shortcuts = await applyAutostartShortcuts(enabled); }
+      catch { throw new HttpError(503, '自動啟動捷徑更新失敗；設定已保存，請檢查啟動資料夾權限後重試'); }
+      return send(res, 200, { autostart: enabled, shortcuts });
+    }
     if (req.url === '/api/device') {
       if (!['DESKTOPMAC', 'IOSIPAD'].includes(input.device)) throw new HttpError(400, '請選擇原有桌面授權或 iPad QR 登入');
       let target;
@@ -399,9 +409,10 @@ guardProtocol(LineClient);
 const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
 const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
 const { runQrLogin } = await import('./qr-login.mjs');
-const server = createProbeServer({ service: guardLineSession(new LineProtocolService()), runPwlessLogin, runQrLogin, prepareRestart: prepareDeviceRestart, onRestarted: () => process.exit(0), relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir });
+const server = createProbeServer({ service: guardLineSession(new LineProtocolService()), runPwlessLogin, runQrLogin, prepareRestart: prepareDeviceRestart, onRestarted: () => process.exit(0), relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir, autostartStore: createAutostartStore(process.env.LOCALAPPDATA, { apply: applyAutostartShortcuts }) });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
 await stagedListen(server, lineDevice().id);
+await seedFromInstallerTask(process.env.LOCALAPPDATA, { apply: applyAutostartShortcuts }).catch(() => print('Could not seed the installer autostart choice; enable it on the page instead.'));
 await saveLauncherDevice(lineDevice().id).catch(() => print('Could not save device preference; select the same identity on the next launch.'));
 print('LinePort: http://127.0.0.1:18765/');
 }

@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createProbeServer } from './server.mjs';
 import { configRevision, createSettingsStore, normalizeConfig } from './route-config.mjs';
+import { createAutostartStore } from './autostart.mjs';
 
 const fakeToken = 'test-only-token';
 test('identity switch validates input, requires stopped relay and protects the API', async t => {
@@ -85,9 +86,9 @@ test('QR API isolates iPad login, protects its image and cancels while busy', as
   assert.equal(after.qr, ''); assert.equal(after.connected, false);
   assert.ok(!after.error.includes('sensitive'));
 });
-async function setup(t, overrides = {}, relayController, settingsStore, runPwlessLogin = async () => {}, runQrLogin, prepareRestart) {
+async function setup(t, overrides = {}, relayController, settingsStore, runPwlessLogin = async () => {}, runQrLogin, prepareRestart, autostartStore) {
   const service = Object.assign(new EventEmitter(), { resumeSession: async () => true, client: { getAllChatMids: async () => ({ memberChats: [] }), getChats: async () => [] } }, overrides);
-  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin, runQrLogin, prepareRestart, relayController, settingsStore });
+  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin, runQrLogin, prepareRestart, relayController, settingsStore, autostartStore });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
@@ -112,6 +113,27 @@ async function setup(t, overrides = {}, relayController, settingsStore, runPwles
   }
   return { call, startRequest, service };
 }
+test('autostart API reports preference state and applies shortcut changes', async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'lineport-server-autostart-'));
+  t.after(async () => { const fs = await import('node:fs/promises'); await fs.rm(home, { recursive: true, force: true }); });
+  const store = createAutostartStore(home, { apply: async () => {} });
+  const { call } = await setup(t, {}, undefined, undefined, undefined, undefined, undefined, store);
+  const initial = await call('/api/autostart', undefined, {}, 'GET');
+  assert.equal(initial.status, 200);
+  assert.deepEqual(JSON.parse(initial.body).autostart, { service: false, relay: false });
+  for (const value of [{}, { service: 'yes' }, { service: true }, null]) assert.equal((await call('/api/autostart', JSON.stringify(value))).status, 400);
+  const updated = await call('/api/autostart', '{"service":true,"relay":true}');
+  assert.equal(updated.status, 200);
+  assert.deepEqual(JSON.parse(updated.body).autostart, { service: true, relay: true });
+  const seeded = await call('/api/autostart', undefined, {}, 'GET');
+  assert.deepEqual(JSON.parse(seeded.body).autostart, { service: true, relay: true });
+  assert.deepEqual(JSON.parse(await readFile(path.join(home, 'LinePort', 'autostart.json'), 'utf8')), { service: true, relay: true });
+});
+test('autostart endpoint stays hidden when the environment has no store', async t => {
+  const { call } = await setup(t);
+  assert.equal((await call('/api/autostart', undefined, {}, 'GET')).status, 404);
+  assert.equal((await call('/api/autostart', '{"service":true,"relay":false}')).status, 404);
+});
 test('QR finalization rejects cancellation and retains successful login state', async t => {
   const before = process.env.LINEPORT_LINE_DEVICE;
   process.env.LINEPORT_LINE_DEVICE = 'IOSIPAD';
@@ -190,8 +212,8 @@ test('home has nonce CSP, no-store and no unresolved placeholders', async t => {
   assert.match(result.headers['content-security-policy'], /script-src 'nonce-/);
   assert.equal(result.headers['cache-control'], 'no-store');
   assert.ok(!result.body.includes('__TOKEN__') && !result.body.includes('__NONCE__'));
-  assert.match(result.body, /v1\.0\.0-rc\.2 · LINE · Telegram/);
-  assert.match(result.body, /releases\/tag\/v1\.0\.0-rc\.2/);
+  assert.match(result.body, /v1\.0\.0-rc\.3 · LINE · Telegram/);
+  assert.match(result.body, /releases\/tag\/v1\.0\.0-rc\.3/);
 });
 test('isolated HTTP download, backup validation and restore preserve pre-restore settings', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-api-acceptance-'));
@@ -216,9 +238,9 @@ test('isolated HTTP download, backup validation and restore preserve pre-restore
   }
   const backup = JSON.parse(backupReply.body);
   const diagnostics = JSON.parse(diagnosticReply.body);
-  assert.equal(backup.appVersion, '1.0.0-rc.2');
+  assert.equal(backup.appVersion, '1.0.0-rc.3');
   assert.deepEqual(backup.config, original);
-  assert.equal(diagnostics.appVersion, '1.0.0-rc.2');
+  assert.equal(diagnostics.appVersion, '1.0.0-rc.3');
   assert.equal(diagnostics.stage, 'unknown');
   assert.equal(diagnostics.routes[0].stage, 'destination_e2ee');
   assert.equal(diagnostics.routes[0].failureReason, 'missing_receiver_key');

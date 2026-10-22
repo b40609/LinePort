@@ -1,7 +1,7 @@
 using System.Diagnostics;
 
 if (args.Contains("--verify-package")) {
-    var required = new[] { "runtime/node.exe", "runtime/LICENSE", "yomi-probe/start.ps1", "yomi-probe/upgrade-service.ps1", "yomi-probe/server.mjs", "yomi-probe/launcher-preference.mjs", "yomi-probe/node_modules/@rikaidev/yomi/dist/line/core/service.js", "yomi-probe/node_modules/qrcode/lib/index.js", "yomi-probe/node_modules/tweetnacl/nacl-fast.js" };
+    var required = new[] { "runtime/node.exe", "runtime/LICENSE", "yomi-probe/start.ps1", "yomi-probe/upgrade-service.ps1", "yomi-probe/server.mjs", "yomi-probe/autostart.mjs", "yomi-probe/launcher-preference.mjs", "yomi-probe/node_modules/@rikaidev/yomi/dist/line/core/service.js", "yomi-probe/node_modules/qrcode/lib/index.js", "yomi-probe/node_modules/tweetnacl/nacl-fast.js" };
     Environment.Exit(required.All(file => File.Exists(Path.Combine(AppContext.BaseDirectory, file))) ? 0 : 1);
     return;
 }

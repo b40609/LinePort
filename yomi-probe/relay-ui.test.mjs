@@ -122,7 +122,7 @@ test('start button explains missing rules, paused rules and expired LINE login',
   const context = vm.createContext({
     $: id => {if(!nodes.has(id))nodes.set(id, {value:'', textContent:''});return nodes.get(id);},
     document: {}, pending:false,switching:false,lastState:{connected:false},relayState:{phase:'stopped'},
-    config:{rules:[]},endpoints:[],collected:new Map(),restoreBackup:null,reading:false,workspaceControls(){},
+    config:{rules:[]},endpoints:[],collected:new Map(),restoreBackup:null,reading:false,workspaceControls(){},autostartSupported:true,
   });
   vm.runInContext(html.split('\n').find(line => line.startsWith('function controls(')), context);
   context.controls();assert.match(nodes.get('startHelp').textContent, /尚未建立規則/);assert.equal(nodes.get('start').disabled, true);

@@ -45,6 +45,9 @@ VersionInfoProductTextVersion={#AppVersion}
 [Languages]
 Name: "zhTW"; MessagesFile: "compiler:Languages\ChineseTraditional.isl"
 
+[Tasks]
+Name: "autostart"; Description: "登入 Windows 時自動啟動 LinePort（預設啟用；之後可在頁面「開機自動啟動」或 Windows 啟動設定中個別關閉）"
+
 [Files]
 Source: "{#PayloadRoot}\*"; DestDir: "{code:GetPayloadDirectory}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PayloadRoot}\yomi-probe\package.json"; DestDir: "{app}"; DestName: "installed-package.json"; Flags: ignoreversion
@@ -53,6 +56,24 @@ Source: "{#ReleaseDirectory}\installed-version.txt"; DestDir: "{app}"; Flags: ig
 [Icons]
 Name: "{autoprograms}\LinePort"; Filename: "{code:GetPayloadDirectory}\LinePort.exe"; WorkingDir: "{code:GetPayloadDirectory}"; Check: not IsSmokeTest
 Name: "{autodesktop}\LinePort"; Filename: "{code:GetPayloadDirectory}\LinePort.exe"; WorkingDir: "{code:GetPayloadDirectory}"; Check: not IsSmokeTest
+
+[Registry]
+; The autostart task records the choice where the app's page toggle reads and manages it.
+Root: HKCU; Subkey: "Software\LinePort"; ValueType: string; ValueName: "AutostartTask"; ValueData: "{code:GetAutostartChoice}"; Flags: uninsdeletevalue; Check: not IsSmokeTest
+
+[UninstallDelete]
+; Uninstalling must not leave Startup entries that call into a removed payload.
+Type: files; Name: "{userappdata}\Microsoft\Windows\Start Menu\Programs\Startup\LinePort 自動啟動.lnk"
+Type: files; Name: "{userappdata}\Microsoft\Windows\Start Menu\Programs\Startup\LinePort 自動啟動 轉送.lnk"
+Type: files; Name: "{localappdata}\LinePort\autostart-service.ps1"
+Type: files; Name: "{localappdata}\LinePort\autostart-relay.ps1"
+Type: files; Name: "{localappdata}\LinePort\autostart.json"
+
+[Code]
+function GetAutostartChoice(Param: String): String;
+begin
+  if IsTaskSelected('autostart') then Result := 'enabled' else Result := 'disabled';
+end;
 
 [Run]
 Filename: "{code:GetPayloadDirectory}\LinePort.exe"; Description: "啟動 LinePort"; Flags: nowait postinstall skipifsilent; Check: not IsSmokeTest

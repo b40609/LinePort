@@ -46,7 +46,7 @@ test('diagnostics allowlists counts and phases, excluding secrets, identity, tex
   const result = safeDiagnostics({ phase: 'running', stage: secret, token: secret, warning: secret, forwarded: 1, errors: -1,
     routes: [{ name: secret, source: { id: secret }, text: secret, phase: secret, stage: secret, pending: 3, warning: secret, failureReason: secret }, { phase: 'failed', stage: 'destination_e2ee', failureReason: 'missing_receiver_key' }, { stage: 'destination_e2ee', failureReason: secret }] }, true);
   assert.ok(!JSON.stringify(result).includes(secret));
-  assert.equal(result.appVersion, '1.0.0-rc.2');
+  assert.equal(result.appVersion, '1.0.0-rc.3');
   assert.equal(result.stage, 'unknown');
   assert.equal(result.routes[0].stage, 'unknown');
   assert.equal(result.routes[1].stage, 'destination_e2ee');
@@ -59,7 +59,7 @@ test('diagnostics allowlists counts and phases, excluding secrets, identity, tex
 test('settings export strips unknown credentials and validates format and cycles', () => {
   const value = config(); value.token = 'SYNTHETIC_SECRET'; value.rules[0].token = 'SYNTHETIC_SECRET';
   const backup = settingsBackup(value);
-  assert.equal(backup.appVersion, '1.0.0-rc.2');
+  assert.equal(backup.appVersion, '1.0.0-rc.3');
   assert.ok(!JSON.stringify(backup).includes('SYNTHETIC_SECRET'));
   assert.deepEqual(validateBackup(backup), config());
   assert.throws(() => validateBackup({ ...backup, version: 2 }), /格式/);
