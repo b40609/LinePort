@@ -2,13 +2,13 @@
 
 在 Windows 背景轉送 LINE 與 Telegram 訊息。支援多來源、多目的、指定發訊者、內容篩選及選用的 Discord 文字目的。
 
-**測試新版：[下載 v1.0.0-rc.1 Windows 免安裝候選版](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.1/LinePort-v1.0.0-rc.1-Windows-x64.zip)，全部解壓縮後雙擊 `LinePort.exe`。** 已包含執行環境，不用安裝 Node.js 或輸入指令；更新會自動停止並切換可辨識的舊服務，保留登入與規則，重開後記住所選身分。[啟動與更新說明](docs/PORTABLE.md)
+**測試新版：[下載 Windows 安裝版 EXE](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.2/LinePort-v1.0.0-rc.2-Windows-x64-Setup.exe)，安裝後由桌面 LinePort 捷徑啟動。亦可使用[下載 v1.0.0-rc.2 Windows 免安裝候選版](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.2/LinePort-v1.0.0-rc.2-Windows-x64.zip)，全部解壓縮後雙擊 `LinePort.exe`。** 已包含執行環境，不用安裝 Node.js 或輸入指令；更新會自動停止並切換可辨識的舊服務，保留登入與規則，重開後記住所選身分。[啟動與更新說明](docs/PORTABLE.md)
 
-**目前為候選版，尚未完成朋友端實機驗收，不是 v1.0 正式版。** 請確認雙擊啟動、目的端實際收到轉送、完整關閉重開後可轉送，以及官方電腦版 LINE 同時收發正常。[候選版說明與驗收步驟](docs/RELEASE-1.0.0-rc.1.md)
+**目前為候選版；本次 LINE 新文字已確認兩個目的各收到一次，包含 Bot 目的群。** 完整 Windows 重啟、長時間運作及其他帳號／裝置組合仍待驗證。[候選版說明與驗收步驟](docs/RELEASE-1.0.0-rc.2.md)
 
 包含 QR 登入保存、群組加密及多代金鑰修正；首次使用依序連結帳號、設定規則、啟動轉送，聊天室與指定成員自動載入。iPad 是可選協定身分，用於嘗試保留官方桌面 LINE，無需實體 iPad；原有桌面授權仍保留。不同帳號與裝置組合仍需驗收。[身分選擇與限制](docs/COMPATIBILITY.md)
 
-[候選版原始碼](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.1/LinePort-v1.0.0-rc.1.zip) · [更新與 SHA-256](docs/RELEASE-1.0.0-rc.1.md) · [先前版本 v0.8.7](https://github.com/b40609/LinePort/releases/tag/v0.8.7) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
+[候選版原始碼](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.2/LinePort-v1.0.0-rc.2.zip) · [更新與 SHA-256](docs/RELEASE-1.0.0-rc.2.md) · [先前版本 v0.8.7](https://github.com/b40609/LinePort/releases/tag/v0.8.7) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
 
 [手機示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-mobile-0.7.jpg)（v0.7.2 歷史畫面；名稱、ID、訊息均為假資料）。
 
@@ -66,7 +66,7 @@ npm.cmd start
 
 | 使用需求 | LinePort 可選身分 | 登入入口與驗證範圍 |
 | --- | --- | --- |
-| A 用戶工作時需要官方 Windows 電腦版 LINE，同時執行 LinePort | `IOSIPAD`：iPad 身分 | QR Code；單一真實帳號已確認共存及目錄／恢復登入，本模式轉送待驗收 |
+| A 用戶工作時需要官方 Windows 電腦版 LINE，同時執行 LinePort | `IOSIPAD`：iPad 身分 | QR Code；單一真實帳號已確認共存及目錄／恢復登入，本次新文字已確認兩個目的各收到一次 |
 | 需要保留官方 iPad LINE | 原有桌面授權（DESKTOPMAC）可另行測試 | 尚無已驗證的共存方案，不保證不影響原裝置 |
 | 沿用既有桌面授權方式 | `DESKTOPMAC`：原有桌面授權 | 原有手機授權／保存登入；可能使其他官方電腦版 LINE 登出 |
 
@@ -87,7 +87,7 @@ npm.cmd start
 | LinePort 與官方電腦版能否同時登入 | 單一真實帳號通過；使用者確認官方電腦版仍能正常收發 |
 | LinePort 能否載入群組／好友、重啟後恢復登入 | 同一帳號通過，無需重掃 QR |
 | 只改 iPad 身分仍無法完成授權 | 已改為對應的 QR 流程並完成該帳號登入；先前 code 0／4 的嘗試與修正見實驗紀錄 |
-| iPad 模式實際訊息解密、轉送與長期共存 | 尚待實機驗收；不能沿用桌面模式結果當作通過 |
+| iPad 模式實際訊息解密、轉送與長期共存 | 本次 LINE 新文字已確認兩個目的各收到一次；長時間運作仍待驗證 |
 | Android／iPhone、官方 Windows／Mac 及既有平板等不同組合 | 不依主要裝置品牌限制登入；其他組合仍待實測，不保證全部共存 |
 
 軟體設計分開處理 **LinePort 主機作業系統、LINE 主要裝置、LINE 協定登入身分**。`IOSIPAD` 中的 iOS 版本是協定欄位，並非要求使用者手機安裝該版本；同理，`DESKTOPMAC` 不代表只能在 Mac 上執行。官方列出可作主要／追加裝置的多種平台，但官方 App 支援不等於本非官方工具已完成相容性驗證。[LINE 官方裝置說明](https://help.line.me/line/smartphone/sp?contentId=20000132&lang=zh-Hant)
@@ -96,7 +96,7 @@ Windows 執行支援目前由 PowerShell 啟動器、ACL 與選用 DPAPI 實作�
 
 ## 運作方式
 
-LINE 透過 [Yomi](https://github.com/RikaiDev/yomi) 讀取／解密及加密發送；Telegram 使用 [官方 Bot API](https://core.telegram.org/bots/api)。本專案負責規則、輪詢、篩選與保存，不需要 AI。
+LINE 透過 [Yomi](https://github.com/RikaiDev/yomi) 讀取／解密及發送。目的預設端對端加密；缺少群組金鑰且確認含不支援 E2EE 的官方帳號時，自動採用僅支援文字的傳輸加密相容模式，頁面明確標示。偵測限 50 名成員與 5 秒，資訊不足時保留受阻狀態；Telegram 使用 [官方 Bot API](https://core.telegram.org/bots/api)。本專案負責規則、輪詢、篩選與保存，不需要 AI。
 
 ```mermaid
 flowchart LR
@@ -124,7 +124,7 @@ flowchart LR
 - Bot Token 可選 Windows DPAPI；舊明文檔為回復保留，LINE 登入／E2EE、訊息與封存仍未加密。勿分享或雲端同步資料目錄。
 - 單一紀錄 16 MiB、盤點紀錄合計 256 MiB 或可用空間低於 64 MiB 時停止收件／發送。封存不刪原檔、不釋放容量；尚無自動壓縮與無限期運作保證。
 
-已完成一次 LINE → LINE 人工驗收，共三則文字轉送與已讀正向對照；多目的、跨平台及長時間運作仍待真實驗收。[已讀實測](docs/READ-RECEIPT-2026-10-10.md) · [驗證紀錄](yomi-probe/VERIFICATION.md)
+已完成一次 LINE → LINE 人工驗收，共三則文字轉送與已讀正向對照；本次另已確認新文字到兩個 LINE 目的各一次（一般群與 Bot 群）。跨平台及長時間運作仍待真實驗收。[已讀實測](docs/READ-RECEIPT-2026-10-10.md) · [驗證紀錄](yomi-probe/VERIFICATION.md)
 
 ## 開發與文件
 
@@ -137,7 +137,7 @@ npm.cmd test
 
 [疑難排解](docs/TROUBLESHOOTING.md) · [架構](docs/ARCHITECTURE.md) · [安全](SECURITY.md)
 
-現行程式位於 `yomi-probe/`。`src/`、`scripts/`、`package/` 為早期 Windows 通知診斷實驗。[早期單配對流程示範](docs/flow.html) 保留作參考。
+現行程式位於 `yomi-probe/`。`src/LinePort.Launcher/`、`scripts/Build-Portable.ps1`、`scripts/Build-Installer.ps1` 與 `installer/` 負責 Windows EXE 打包；其他舊通知診斷程式保留作參考。[早期單配對流程示範](docs/flow.html) 保留作參考。
 
 ## 授權
 

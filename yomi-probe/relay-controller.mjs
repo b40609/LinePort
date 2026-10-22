@@ -2,7 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { relayWarning, relayFailure, safeRelayStage, RelayError } from './relay-health.mjs';
+import { relayWarning, relayFailure, safeRelayStage, safeDestinationFailureReason, RelayError } from './relay-health.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const execute = promisify(execFile);
@@ -34,6 +34,8 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
             key: String(route.key || '').slice(0, 64), ruleId: String(route.ruleId || '').slice(0, 64), name: String(route.name || '').slice(0, 100),
             source: endpoint(route.source), destination: endpoint(route.destination), phase: String(route.phase || '').slice(0, 30),
             stage: safeRelayStage(route.stage),
+            ...(['e2ee', 'transport'].includes(route.lineProtection) ? { lineProtection: route.lineProtection } : {}),
+            ...(route.stage === 'destination_e2ee' ? { failureReason: safeDestinationFailureReason(route.failureReason) } : {}),
             forwarded: count(route.forwarded), pending: count(route.pending), uncertain: count(route.uncertain), errors: count(route.errors), skipped: count(route.skipped),
             lastSend: typeof route.lastSend === 'string' ? route.lastSend.slice(0, 40) : null, warning: String(route.warning || '').slice(0, 300), replyNotice: String(route.replyNotice || '').slice(0, 200),
             retryAt: count(route.retryAt),

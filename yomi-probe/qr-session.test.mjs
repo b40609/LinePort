@@ -6,6 +6,7 @@ import https from 'node:https';
 import nacl from 'tweetnacl';
 import { completeQrLogin } from './qr-login.mjs';
 import { guardLineSession } from './line-e2ee-state.mjs';
+import { prepareRelayDestination } from './relay-send.mjs';
 import { LineProtocolService } from './node_modules/@rikaidev/yomi/dist/line/core/service.js';
 import { LineClient } from './node_modules/@rikaidev/yomi/dist/line/client/index.js';
 import { writeFieldsArray } from './node_modules/@rikaidev/yomi/dist/line/core/thrift/struct/writer.js';
@@ -64,6 +65,54 @@ for (const blob of [undefined, '[]', '{broken']) test(`restart recovers bootstra
   assert.equal(await restored.resumeSession(), true);
   assert.equal(Number(restored.e2eeManager.getSelfKeyByMid('usynthetic').keyId), 108);
   assert.equal(restored.e2eeManager.importedKeys.size, 8);
+  assert.deepEqual([...store.values], before); assert.equal(store.writes.length, writes);
+});
+
+for (const retained of [101, 108]) test(`partial key cache retaining ${retained} restores all generations before group preflight`, async () => {
+  const store = memory(); await completeQrLogin(service(store), fixture(), { createClient });
+  const keys = JSON.parse(store.values.get('line_e2ee_keys'));
+  store.values.set('line_e2ee_keys', JSON.stringify(keys.filter(key => Number(key.keyId) === retained)));
+  const before = [...store.values], writes = store.writes.length, restored = service(store);
+  assert.equal(await restored.resumeSession(), true);
+  assert.equal(restored.e2eeManager.importedKeys.size, 8);
+  assert.equal(Number(restored.e2eeManager.getSelfKeyByMid('usynthetic').keyId), 108);
+  // Existing groups may still wrap their shared key for an older receiver key.
+  const receiver = pair(1), group = pair(50);
+  const shared = Buffer.from(nacl.scalarMult(receiver.secretKey, receiver.publicKey));
+  const hash = label => createHash('sha256').update(shared).update(label).digest();
+  const ivHash = hash('IV'), iv = Buffer.from(ivHash.subarray(0, 16).map((value, index) => value ^ ivHash[index + 16]));
+  const cipher = createCipheriv('aes-256-cbc', hash('Key'), iv);
+  restored.client.getLastE2EEGroupSharedKey = async () => ({ groupKeyId: 500, creator: 'usynthetic', creatorKeyId: 101,
+    receiverKeyId: 101, encryptedSharedKey: Buffer.concat([cipher.update(Buffer.from(group.secretKey)), cipher.final()]) });
+  restored.client.sendMessage = () => assert.fail('Preflight must not post messages');
+  await prepareRelayDestination(restored, 'csynthetic');
+  assert.deepEqual(restored.e2eeManager.groupKeys.get('csynthetic:500').privateKey, Buffer.from(group.secretKey));
+  // Only normal group-key caching is allowed; bootstrap/self-key storage stays untouched.
+  assert.deepEqual([...store.values].filter(([key]) => !key.startsWith('line_e2ee_group_by_mid:')), before);
+  assert.deepEqual(store.writes.slice(writes), ['line_e2ee_group_by_mid:csynthetic:500']);
+});
+
+test('bootstrap merge preserves later cached generations without changing the issued send key', async () => {
+  const store = memory(); await completeQrLogin(service(store), fixture(), { createClient });
+  const keys = JSON.parse(store.values.get('line_e2ee_keys')), newer = pair(9);
+  store.values.set('line_e2ee_keys', JSON.stringify([{ ...keys.at(-1), keyId: 109, publicKey: Array.from(newer.publicKey), privateKey: Array.from(newer.secretKey) }]));
+  const before = [...store.values], writes = store.writes.length, restored = service(store);
+  assert.equal(await restored.resumeSession(), true);
+  assert.equal(restored.e2eeManager.importedKeys.size, 9);
+  assert.deepEqual(Buffer.from(restored.e2eeManager.getSelfKeyById(109).privateKey), Buffer.from(newer.secretKey));
+  assert.equal(Number(restored.e2eeManager.getSelfKeyByMid('usynthetic').keyId), 108);
+  assert.deepEqual([...store.values], before); assert.equal(store.writes.length, writes);
+});
+
+test('bootstrap merge rejects conflicting key IDs without rewriting durable state', async () => {
+  const store = memory(); await completeQrLogin(service(store), fixture(), { createClient });
+  const keys = JSON.parse(store.values.get('line_e2ee_keys')), different = pair(99);
+  keys.at(-1).publicKey = Array.from(different.publicKey);
+  keys.at(-1).privateKey = Array.from(different.secretKey);
+  store.values.set('line_e2ee_keys', JSON.stringify(keys));
+  const before = [...store.values], writes = store.writes.length, restored = service(store);
+  await assert.rejects(restored.resumeSession(), /validation failed/);
+  assert.equal(restored.loginRequired, true); assert.equal(restored.state, 'error');
   assert.deepEqual([...store.values], before); assert.equal(store.writes.length, writes);
 });
 

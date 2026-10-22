@@ -33,17 +33,21 @@ test('startup failures identify destination encryption, source baseline and loca
 test('a destination encryption failure is isolated and the same route can restart after key readiness', async () => {
   const directory = await fixture(), line = adapter({ messages: [message('new')] });
   let ready = false;
-  line.prepare = async id => { if (id === 'cbad' && !ready) throw new Error('missing existing group key'); };
+  line.prepare = async id => { if (id === 'cbad' && !ready) throw new Error('Missing self E2EE key for receiverKeyId=SYNTHETIC_PRIVATE_KEY_ID'); };
   const options = { config: config(rule('one', [endpoint('cs')], [endpoint('cbad'), endpoint('cgood')])), adapters: { line }, directory, now: () => 1000, pause: async () => {} };
   const first = await createMultiRelay(options);
   await first.tick();
   assert.equal(first.state.phase, 'degraded');
   assert.equal(first.state.routes[0].stage, 'destination_e2ee');
+  assert.equal(first.state.routes[0].failureReason, 'missing_receiver_key');
+  assert.match(first.state.routes[0].warning, /舊代接收金鑰/);
+  assert.ok(!JSON.stringify(first.state).includes('SYNTHETIC_PRIVATE'));
   assert.deepEqual(line.calls.map(([id]) => id), ['cgood']);
   ready = true;
   const second = await createMultiRelay(options);
   await second.tick();
   assert.equal(second.state.phase, 'running');
+  assert.equal(second.state.routes[0].failureReason, undefined);
   assert.deepEqual(line.calls.map(([id]) => id), ['cgood', 'cbad']);
 });
 
@@ -411,6 +415,8 @@ test('a stalled destination preparation cannot prevent an independent route from
   const relay = await createMultiRelay({ config: config(rule('r', [endpoint('cs')], [endpoint('cslow'), endpoint('cgood')])), adapters: { line }, directory: await fixture(), now: () => 1000, operationTimeoutMs: 5 });
   await relay.tick();
   assert.equal(relay.state.routes[0].phase, 'failed');
+  assert.equal(relay.state.routes[0].failureReason, 'timeout');
+  assert.match(relay.state.routes[0].warning, /逾時/);
   assert.deepEqual(line.calls, [['cgood', 'hello']]);
 });
 

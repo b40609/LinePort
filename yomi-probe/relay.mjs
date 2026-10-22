@@ -59,7 +59,7 @@ let startedAt = saved.startedAt;
   state.stage = 'e2ee_keys';
   requireRelayEncryption(service);
   state.stage = 'destination_e2ee';
-  await prepareRelayDestination(service, destination);
+  state.lineProtection = await prepareRelayDestination(service, destination);
   state.stage = 'route_identity';
   const routeIdentity = createHash('sha256').update(JSON.stringify([service.profile.mid, source, destination])).digest('hex');
   if (saved.routeIdentity && saved.routeIdentity !== routeIdentity) throw new Error('Route identity changed');
@@ -79,7 +79,7 @@ let startedAt = saved.startedAt;
       if (service.loginRequired) { state.stage = 'login_required'; throw new Error('Login required'); }
       state.polls++; state.lastPoll = new Date().toISOString();
       state.lastRead = inspectRelayRead(messages, seen, startedAt);
-      await forwardBatch({ messages, seen, startedAt, record, send: text => sendRelayText(service, destination, text), state });
+      await forwardBatch({ messages, seen, startedAt, record, send: text => sendRelayText(service, destination, text, { transportOnly: state.lineProtection === 'transport' }), state });
       state.consecutiveErrors = 0; state.retrySeconds = 0;
       state.stage = 'waiting';
     } catch {

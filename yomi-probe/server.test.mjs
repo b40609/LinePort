@@ -190,8 +190,8 @@ test('home has nonce CSP, no-store and no unresolved placeholders', async t => {
   assert.match(result.headers['content-security-policy'], /script-src 'nonce-/);
   assert.equal(result.headers['cache-control'], 'no-store');
   assert.ok(!result.body.includes('__TOKEN__') && !result.body.includes('__NONCE__'));
-  assert.match(result.body, /v1\.0\.0-rc\.1 · LINE · Telegram/);
-  assert.match(result.body, /releases\/tag\/v1\.0\.0-rc\.1/);
+  assert.match(result.body, /v1\.0\.0-rc\.2 · LINE · Telegram/);
+  assert.match(result.body, /releases\/tag\/v1\.0\.0-rc\.2/);
 });
 test('isolated HTTP download, backup validation and restore preserve pre-restore settings', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-api-acceptance-'));
@@ -202,7 +202,7 @@ test('isolated HTTP download, backup validation and restore preserve pre-restore
     include: ['sample'], exclude: ['ignore'], prefix: '[sample] ' }] });
   await writeFile(path.join(directory, 'lineport-rules.json'), JSON.stringify({ ...original, token: secret, rules: original.rules.map(rule => ({ ...rule, token: secret })) }));
   const store = createSettingsStore(directory);
-  const relay = { status: async () => ({ phase: 'stopped', stage: secret, forwarded: 3, warning: secret, routes: [{ phase: 'failed', stage: 'destination_e2ee', forwarded: 3, name: secret, token: secret }] }) };
+  const relay = { status: async () => ({ phase: 'stopped', stage: secret, forwarded: 3, warning: secret, routes: [{ phase: 'failed', stage: 'destination_e2ee', failureReason: 'missing_receiver_key', forwarded: 3, name: secret, token: secret }] }) };
   const { call } = await setup(t, {}, relay, store);
   const backupReply = await call('/api/settings/backup', undefined, {}, 'GET');
   const diagnosticReply = await call('/api/diagnostics', undefined, {}, 'GET');
@@ -216,12 +216,13 @@ test('isolated HTTP download, backup validation and restore preserve pre-restore
   }
   const backup = JSON.parse(backupReply.body);
   const diagnostics = JSON.parse(diagnosticReply.body);
-  assert.equal(backup.appVersion, '1.0.0-rc.1');
+  assert.equal(backup.appVersion, '1.0.0-rc.2');
   assert.deepEqual(backup.config, original);
-  assert.equal(diagnostics.appVersion, '1.0.0-rc.1');
+  assert.equal(diagnostics.appVersion, '1.0.0-rc.2');
   assert.equal(diagnostics.stage, 'unknown');
   assert.equal(diagnostics.routes[0].stage, 'destination_e2ee');
-  assert.deepEqual(Object.keys(diagnostics.routes[0]).sort(), ['errors', 'forwarded', 'pending', 'phase', 'route', 'skipped', 'stage', 'uncertain']);
+  assert.equal(diagnostics.routes[0].failureReason, 'missing_receiver_key');
+  assert.deepEqual(Object.keys(diagnostics.routes[0]).sort(), ['errors', 'failureReason', 'forwarded', 'pending', 'phase', 'route', 'skipped', 'stage', 'uncertain']);
   const before = await readFile(path.join(directory, 'lineport-rules.json'), 'utf8');
   const invalid = { ...backup, version: 999 };
   assert.equal((await call('/api/settings/validate', JSON.stringify({ backup: invalid }))).status, 400);

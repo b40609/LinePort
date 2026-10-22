@@ -53,6 +53,9 @@ try {
     $version = (Get-Content -LiteralPath (Join-Path $output 'yomi-probe/package.json') -Raw | ConvertFrom-Json).version
     Copy-Item -LiteralPath (Join-Path $root "docs/RELEASE-$version.md") -Destination (Join-Path $output '更新說明.md')
     Copy-Item -LiteralPath (Join-Path $root 'docs/PORTABLE.md') -Destination (Join-Path $output '先讀我.md')
+    foreach ($notice in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) {
+        Copy-Item -LiteralPath (Join-Path $root $notice) -Destination (Join-Path $output $notice)
+    }
     & (Join-Path $output 'runtime/node.exe') --version | Set-Content -LiteralPath (Join-Path $output 'runtime/VERSION.txt')
     Write-Output "Portable package ready: $output"
 } finally { Pop-Location }

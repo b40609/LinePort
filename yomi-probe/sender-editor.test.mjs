@@ -43,6 +43,17 @@ async function editor() {
   return { nodes, run, alias, saved: () => saved };
 }
 
+test('route status distinguishes destination Bot compatibility from E2EE', async () => {
+  const ui = await editor();
+  for (const [mode, expected] of [['transport', 'Bot 相容文字：傳輸加密，無端對端加密'], ['e2ee', '（端對端加密）']]) {
+    ui.run(`renderRouteStatuses({routes:[{name:'Rule',source:{name:'Source'},destination:{name:'Destination'},phase:'running',lineProtection:'${mode}',forwarded:0,pending:0,uncertain:0,errors:0,skipped:0}]})`);
+    const label = ui.nodes.get('routeStatuses').children[0].textContent;
+    assert.ok(label.includes('Source → Destination'));
+    assert.ok(label.includes(expected));
+    assert.ok(label.includes('運作中'));
+  }
+});
+
 test('sender editor saves visible alias without input event and restores alias before platform name', async () => {
   const ui = await editor();
   await ui.nodes.get('loadSenders').onclick();

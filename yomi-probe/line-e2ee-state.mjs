@@ -29,9 +29,23 @@ export function guardLineSession(service) {
       if (Array.isArray(savedKeys) && savedKeys.some(key => key.mid !== mid)) throw new Error('LINE key account mismatch');
       const raw = await service.credentialStore.get('line_e2ee_bootstrap');
       const bootstrap = raw ? JSON.parse(raw) : null;
-      if (!service.e2eeManager.getSelfKeyByMid(mid) && bootstrap) {
+      if (bootstrap) {
         const { recoverBootstrapKeys } = await import('./node_modules/@rikaidev/yomi/dist/line/core/e2ee/recovery/bootstrap-keys.js');
-        await recoverBootstrapKeys(service, { persist: false });
+        const manager = service.e2eeManager;
+        // A non-empty cache can still lack older group receiver keys or the
+        // issued send key. Merge every bootstrap generation without replacing
+        // newer cached keys, persisting secrets, or rebinding the send key.
+        await recoverBootstrapKeys({ profile: service.profile, credentialStore: service.credentialStore, e2eeManager: {
+          importKeys(keys) {
+            for (const key of keys) {
+              const cached = manager.getSelfKeyById(key.keyId);
+              if (cached && (!Buffer.from(cached.publicKey).equals(Buffer.from(key.publicKey))
+                || !Buffer.from(cached.privateKey).equals(Buffer.from(key.privateKey)))) throw new Error('Conflicting LINE self key');
+            }
+            manager.importKeys(keys.filter(key => !manager.getSelfKeyById(key.keyId)));
+          },
+          bindSelfKeysToMid() {},
+        } }, { persist: false });
       }
       selectLineSelfKey(service, bootstrap?.keyId);
       service.e2eeWarning = false;

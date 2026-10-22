@@ -43,7 +43,7 @@ function Update-LinePortService($Html, $TargetDirectory) {
     # Check the replacement is usable before touching the old process.
     $node = (Get-Command node.exe -ErrorAction Stop).Source
     foreach ($dependency in @('node_modules/@rikaidev/yomi/dist/line/core/service.js', 'node_modules/qrcode/lib/index.js', 'node_modules/tweetnacl/nacl-fast.js')) {
-        if (!(Test-Path -LiteralPath (Join-Path $TargetDirectory $dependency))) { throw 'The new download is incomplete. Extract the entire Windows ZIP again; the old service is unchanged.' }
+        if (!(Test-Path -LiteralPath (Join-Path $TargetDirectory $dependency))) { throw 'The new installation is incomplete. Run the LinePort installer again (or fully extract a portable package); the old service is unchanged.' }
     }
     & $node --check (Join-Path $TargetDirectory 'server.mjs')
     if ($LASTEXITCODE -ne 0) { throw 'New service validation failed; the old service is unchanged.' }

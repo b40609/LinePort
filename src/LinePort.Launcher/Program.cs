@@ -32,7 +32,7 @@ window.Shown += async (_, _) => {
         var runtime = Path.Combine(root, "runtime");
         var script = Path.Combine(root, "yomi-probe", "start.ps1");
         if (!File.Exists(Path.Combine(runtime, "node.exe")) || !File.Exists(script))
-            throw new InvalidOperationException("檔案不完整，請先將整個 Windows ZIP 解壓縮，再開啟 LinePort.exe。");
+            throw new InvalidOperationException("程式檔案不完整，請重新執行 LinePort 安裝程式，再由桌面捷徑啟動。使用舊免安裝版時，請確認已完整解壓縮。");
         var info = new ProcessStartInfo {
             FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"),
             WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
@@ -48,7 +48,7 @@ window.Shown += async (_, _) => {
         var details = await error;
         if (process.ExitCode != 0) {
             // Launcher errors contain no account files or message contents.
-            throw new InvalidOperationException("啟動未完成，已避免關閉無法辨識的程序。\n請確認已完整解壓縮，並保留此訊息供排查。\n\n" + details[..Math.Min(details.Length, 1800)]);
+            throw new InvalidOperationException("啟動未完成。請保留此訊息供排查；若檔案不完整，請重新執行安裝程式。\n\n" + details[..Math.Min(details.Length, 1800)]);
         }
     } catch (Exception error) {
         MessageBox.Show(window, error.Message, "LinePort 啟動失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);

@@ -4,7 +4,7 @@ import { appendRecord, loadJournal, establishBaseline } from './relay-core.mjs';
 import { unseenText } from './relay-rules.mjs';
 import { createSettingsStore, configRevision, endpointKey, matchingContent, textRejection } from './route-config.mjs';
 import { lineDirectory, readLineSince } from './line-directory.mjs';
-import { requireRelayEncryption, inspectRelayRead, relayFailure, RelayError } from './relay-health.mjs';
+import { requireRelayEncryption, inspectRelayRead, relayFailure, RelayError, destinationEncryptionFailure } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
 import { createTelegramClient, createTelegramInbox, TelegramRateLimit } from './telegram.mjs';
 import { createDiscordClient, DiscordRateLimit } from './discord.mjs';
@@ -86,7 +86,12 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       }
       status.stage = destination.platform === 'line' ? 'destination_e2ee' : 'destination_prepare';
       if (!preparations.has(destinationKey)) preparations.set(destinationKey, withDeadline(to.prepare(destination.id), operationTimeoutMs));
-      await preparations.get(destinationKey);
+      const protection = await preparations.get(destinationKey);
+      if (destination.platform === 'line' && ['e2ee', 'transport'].includes(protection)) status.lineProtection = protection;
+      if (protection === 'transport' && rule.media) {
+        status.stage = 'destination_prepare';
+        throw new RelayError('此目的 Bot 群組目前僅支援相容文字傳送；請關閉此規則的圖片／檔案，或另建純文字規則。');
+      }
       if (!saved.startedAt) {
         status.stage = 'baseline';
         if (!baselines.has(sourceKey)) baselines.set(sourceKey, withDeadline(from.recent(source.id), operationTimeoutMs));
@@ -97,7 +102,8 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       status.phase = 'running'; status.stage = 'waiting';
     } catch (error) {
       status.phase = 'failed'; status.errors++;
-      status.warning = error instanceof RelayError ? error.message : relayFailure(status.stage);
+      if (status.stage === 'destination_e2ee') Object.assign(status, destinationEncryptionFailure(error instanceof OperationTimeout ? { name: 'TimeoutError' } : error));
+      else status.warning = error instanceof RelayError ? error.message : relayFailure(status.stage);
     }
   }
   if (!edges.length) throw new RelayError('請至少啟用一條轉送規則');
@@ -283,16 +289,24 @@ export async function createLineRelayAdapter(service, endpoints, { downloadPhoto
     if (service.loginRequired) throw new RelayError('LINE 登入已失效，請停止後重新授權');
     if (!allowed.has(id)) throw new RelayError('LINE 聊天室已不在群組或好友列表內');
   };
+  const protection = new Map();
   return {
     identity: `line:${service.profile.mid}`,
-    async prepare(id) { check(id); await prepareRelayDestination(service, id); },
+    async prepare(id) {
+      check(id); protection.delete(id);
+      const mode = await prepareRelayDestination(service, id);
+      protection.set(id, mode); return mode;
+    },
     async recent(id) { check(id); return service.getRecentMessages(id, 50); },
     async read(id, time, known) { check(id); return readLineSince(service, id, time, known); },
     preparePayload: text => typeof text === 'string' ? undefined : downloadPhoto
       ? downloadPhoto(text) : Promise.reject(new RelayError('Telegram 圖片來源未連結，待送已保留；請重新連結平台')),
     send(id, text, options = {}) {
       check(id);
-      return typeof text === 'string' ? sendRelayText(service, id, text, options) : sendLinePhoto(service, id, text, options.prepared, options);
+      if (!protection.has(id)) throw new RelayError('目的聊天室尚未完成準備，請停止後重新啟動轉送');
+      if (typeof text === 'string') return sendRelayText(service, id, text, { ...options, transportOnly: protection.get(id) === 'transport' });
+      if (protection.get(id) === 'transport') throw new RelayError('Bot 群組相容模式目前僅支援文字');
+      return sendLinePhoto(service, id, text, options.prepared, options);
     },
   };
 }

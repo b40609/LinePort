@@ -1,7 +1,7 @@
 import { normalizeConfig, matchingContent, textRejection } from './route-config.mjs';
 import { HttpError } from './local-http.mjs';
 import { inSchedule } from './rule-options.mjs';
-import { RelayError, safeRelayStage } from './relay-health.mjs';
+import { RelayError, safeRelayStage, safeDestinationFailureReason } from './relay-health.mjs';
 
 export function previewRules(input) {
   const config = normalizeConfig(input.config);
@@ -34,7 +34,7 @@ export function previewRules(input) {
 }
 
 export function settingsBackup(config) {
-  return { format: 'lineport-settings', version: 1, appVersion: '1.0.0-rc.1', exportedAt: new Date().toISOString(), config: normalizeConfig(config) };
+  return { format: 'lineport-settings', version: 1, appVersion: '1.0.0-rc.2', exportedAt: new Date().toISOString(), config: normalizeConfig(config) };
 }
 export function validateBackup(backup) {
   if (!backup || backup.format !== 'lineport-settings' || backup.version !== 1) throw new HttpError(400, '不支援的備份格式；請使用 LinePort 設定備份 JSON');
@@ -45,11 +45,13 @@ export function validateBackup(backup) {
 export function safeDiagnostics(relay, connected) {
   const count = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
   const phases = new Set(['running', 'stopped', 'starting', 'degraded', 'failed', 'blocked', 'unavailable', 'legacy']);
-  return { format: 'lineport-diagnostics', version: 1, appVersion: '1.0.0-rc.1', exportedAt: new Date().toISOString(), lineConnected: connected === true,
+  return { format: 'lineport-diagnostics', version: 1, appVersion: '1.0.0-rc.2', exportedAt: new Date().toISOString(), lineConnected: connected === true,
     phase: phases.has(relay.phase) ? relay.phase : 'unavailable',
     stage: safeRelayStage(relay.stage),
     totals: Object.fromEntries(['forwarded', 'uncertain', 'errors', 'polls'].map(key => [key, count(relay[key])])),
     routes: (Array.isArray(relay.routes) ? relay.routes : []).slice(0, 100).map((route, index) => ({ route: index + 1, phase: phases.has(route.phase) ? route.phase : 'unavailable',
       stage: safeRelayStage(route.stage),
+      ...(['e2ee', 'transport'].includes(route.lineProtection) ? { lineProtection: route.lineProtection } : {}),
+      ...(route.stage === 'destination_e2ee' ? { failureReason: safeDestinationFailureReason(route.failureReason) } : {}),
       ...Object.fromEntries(['forwarded', 'pending', 'uncertain', 'errors', 'skipped'].map(key => [key, count(route[key])])) })) };
 }

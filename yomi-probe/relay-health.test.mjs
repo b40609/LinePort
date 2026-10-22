@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inspectRelayRead, relayWarning, requireRelayEncryption } from './relay-health.mjs';
+import { inspectRelayRead, relayWarning, requireRelayEncryption, destinationEncryptionFailure } from './relay-health.mjs';
 
 test('group access alone cannot start a relay without a bound encryption key', () => {
   assert.throws(() => requireRelayEncryption({ profile: { mid: 'fake-account' }, e2eeManager: { getSelfKeyByMid: () => undefined } }), /加解密金鑰/);
@@ -31,4 +31,25 @@ test('unseen messages filtered by a future local baseline are visible for diagno
   assert.equal(lastRead.history, 1);
   assert.equal(lastRead.eligible, 0);
   assert.match(relayWarning({ phase: 'running', lastRead }), /電腦日期與時間/);
+});
+
+test('destination encryption failures distinguish key and network causes without leaking upstream data', () => {
+  const cases = [
+    [new Error('Missing self E2EE key for receiverKeyId=SYNTHETIC_SECRET'), 'missing_receiver_key', /舊代接收金鑰/],
+    [new Error('Missing self E2EE key for mid=SYNTHETIC_SECRET'), 'missing_self_key', /帳號的發送金鑰/],
+    [new Error('No existing LINE group E2EE key for SYNTHETIC_SECRET'), 'missing_group_key', /未提供/],
+    [new Error('Peer E2EE key mismatch for SYNTHETIC_SECRET'), 'peer_key_mismatch', /版本不符/],
+    [new Error('Incomplete group shared key payload'), 'invalid_group_key', /無法解密/],
+    [Object.assign(new Error('SYNTHETIC_SECRET'), { code: 'ERR_OSSL_BAD_DECRYPT' }), 'invalid_group_key', /無法解密/],
+    [Object.assign(new Error('SYNTHETIC_SECRET'), { cause: { code: 'ECONNRESET' } }), 'network', /連線失敗/],
+    [Object.assign(new Error('SYNTHETIC_SECRET'), { code: 'ETIMEDOUT' }), 'timeout', /逾時/],
+    [Object.assign(new Error('SYNTHETIC_SECRET'), { name: 'TimeoutError' }), 'timeout', /逾時/],
+    [new Error('SYNTHETIC_SECRET'), 'unknown', /匯出診斷/],
+    [null, 'unknown', /匯出診斷/],
+  ];
+  for (const [error, reason, text] of cases) {
+    const result = destinationEncryptionFailure(error);
+    assert.equal(result.failureReason, reason); assert.match(result.warning, text);
+    assert.ok(!JSON.stringify(result).includes('SYNTHETIC_SECRET'));
+  }
 });

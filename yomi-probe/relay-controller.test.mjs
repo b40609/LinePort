@@ -54,12 +54,25 @@ test('startup errors report the failed relay stage without subprocess output', a
 
 test('multi-route startup reports the failed operation and status rejects arbitrary stage text', async () => {
   const request = async () => ({ ok: true, json: async () => ({ app: 'line-relay-bridge', version: 3, phase: 'failed', stage: 'SYNTHETIC_SECRET', routes: [
-    { phase: 'failed', stage: 'destination_e2ee', warning: '目的群組加密準備失敗' }, { stage: 'SYNTHETIC_SECRET' },
+    { phase: 'failed', stage: 'destination_e2ee', failureReason: 'missing_receiver_key', warning: '目的群組加密準備失敗' }, { stage: 'SYNTHETIC_SECRET', failureReason: 'SYNTHETIC_SECRET' },
+    { stage: 'destination_e2ee', failureReason: 'SYNTHETIC_SECRET' },
   ] }) });
   const controller = createRelayController({ request, run: async () => { throw new Error('SYNTHETIC_SECRET'); } });
   const state = await controller.status();
   assert.equal(state.stage, 'unknown');
   assert.equal(state.routes[0].stage, 'destination_e2ee');
   assert.equal(state.routes[1].stage, 'unknown');
+  assert.equal(state.routes[0].failureReason, 'missing_receiver_key');
+  assert.equal(state.routes[1].failureReason, undefined);
+  assert.equal(state.routes[2].failureReason, 'unknown');
+  assert.ok(!JSON.stringify(state).includes('SYNTHETIC_SECRET'));
   await assert.rejects(controller.startRules('a'.repeat(64)), error => /destination_e2ee/.test(error.message) && /目的群組加密/.test(error.message) && !error.message.includes('SYNTHETIC_SECRET'));
+});
+
+test('route status exposes only known LINE protection modes', async () => {
+  const request = async () => ({ ok: true, json: async () => ({ app: 'line-relay-bridge', version: 3, phase: 'running',
+    routes: ['e2ee', 'transport', 'SYNTHETIC_SECRET'].map(lineProtection => ({ phase: 'running', lineProtection })) }) });
+  const state = await createRelayController({ request }).status();
+  assert.deepEqual(state.routes.map(route => route.lineProtection), ['e2ee', 'transport', undefined]);
+  assert.ok(!JSON.stringify(state).includes('SYNTHETIC_SECRET'));
 });

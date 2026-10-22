@@ -70,3 +70,49 @@ test('LINE adapter completes relay initialization, sending and restart deduplica
   const restarted = await createMultiRelay(options); await restarted.tick();
   assert.equal(calls.filter(call => call[0] === 'send').length, 1);
 });
+
+test('bot destinations automatically use compatible text while other routes retain E2EE and restart deduplication', async () => {
+  const { service, calls, messages } = fixture();
+  service.client.getAllChatMids = async () => ({ memberChats: ['csource', 'cdestination', 'cgood'] });
+  service.client.getChats = async ids => ids.map(chatMid => ({ chatMid, extra: { 1: { 4: { usynthetic: 1, ubot: 1 } } } }));
+  service.client.negotiateE2EEPublicKey = async mid => ({ 3: mid === 'ubot' ? -1 : 2 });
+  service.client.getContacts = async ids => ids.map(mid => ({ mid, isOfficial: mid === 'ubot' }));
+  service.client.sendMessage = async payload => { calls.push(['transport', payload]); return { id: '998' }; };
+  service.e2eeManager.encryptE2EEMessage = async id => {
+    if (id === 'cdestination') throw new Error(`No existing LINE group E2EE key for ${id}; synthetic`);
+    calls.push(['encrypt', id]);
+  };
+  const source = endpoint('csource'), destinations = [endpoint('cdestination'), endpoint('cgood')];
+  const config = normalizeConfig({ version: 1, rules: [{ id: 'one', enabled: true, sources: [source], destinations }] });
+  const options = { config, directory: await mkdtemp(path.join(os.tmpdir(), 'lineport-bot-')), now: () => 1000, pause: async () => {} };
+  const start = async () => createMultiRelay({ ...options, adapters: { line: await createLineRelayAdapter(service, [source, ...destinations]) } });
+  const relay = await start();
+  assert.equal(relay.state.phase, 'running');
+  assert.deepEqual(relay.state.routes.map(route => route.lineProtection), ['transport', 'e2ee']);
+  messages.push({ id: '1', text: 'Synthetic source text', createdTime: 2000, from: 'ufriend', to: 'csource', contentType: 0 });
+  await relay.tick();
+  assert.equal(relay.state.forwarded, 2);
+  assert.deepEqual(calls.filter(call => call[0] === 'transport'), [['transport', { to: 'cdestination', text: 'Synthetic source text', contentType: 0 }]]);
+  assert.deepEqual(calls.filter(call => call[0] === 'send').map(call => call[1]), ['cgood']);
+  const restarted = await start(); await restarted.tick();
+  assert.equal(calls.filter(call => ['send', 'transport'].includes(call[0])).length, 2);
+  // Caller-supplied options cannot downgrade a prepared E2EE destination.
+  const adapter = await createLineRelayAdapter(service, [source, ...destinations]);
+  await adapter.prepare('cgood');
+  await adapter.send('cgood', 'Synthetic', { transportOnly: true });
+  assert.equal(calls.at(-1)[0], 'send');
+  assert.throws(() => adapter.send('csource', 'Synthetic'), /尚未完成準備/);
+  await adapter.prepare('cdestination');
+  assert.throws(() => adapter.send('cdestination', { kind: 'photo' }), /僅支援文字/);
+});
+
+test('bot compatibility blocks media routes before downloading or posting attachments', async () => {
+  const config = normalizeConfig({ version: 1, rules: [{ id: 'media', enabled: true, media: true,
+    sources: [{ platform: 'telegram', id: '-1' }], destinations: [endpoint('cdestination')] }] });
+  const relay = await createMultiRelay({ config, directory: await mkdtemp(path.join(os.tmpdir(), 'lineport-bot-media-')),
+    adapters: { telegram: { identity: 'synthetic-telegram', recent: () => assert.fail('Do not read blocked media source') },
+      line: { identity: 'synthetic-line', prepare: async () => 'transport', send: () => assert.fail('Do not send media') } } });
+  assert.equal(relay.state.phase, 'failed');
+  assert.equal(relay.state.routes[0].stage, 'destination_prepare');
+  assert.match(relay.state.routes[0].warning, /僅支援相容文字/);
+});

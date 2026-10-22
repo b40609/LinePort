@@ -6,11 +6,11 @@
 
 Windows 11 x64。免安裝版內含執行環境；只有原始碼使用者才需要 Node.js 與 npm（已驗證 Node.js 26.4.0）。一台持續連網、不休眠的電腦。使用 LINE 時需主要裝置授權；只用 Telegram 時不需要 LINE 登入。主要裝置不限定 iPhone；主機與 LINE 登入身分的差別見[相容性矩陣](COMPATIBILITY.md)。macOS／Linux 主機尚未支援。
 
-一般使用者請下載 [v1.0.0-rc.1 Windows 免安裝候選版](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.1/LinePort-v1.0.0-rc.1-Windows-x64.zip)，全部解壓後雙擊 LinePort.exe。候選版待實機驗收，詳見[使用與更新說明](PORTABLE.md)。不需要另外安裝 .NET 或 AI API。
+一般使用者建議下載 [Windows 安裝版 EXE](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.2/LinePort-v1.0.0-rc.2-Windows-x64-Setup.exe)，安裝後由桌面 LinePort 捷徑啟動。亦可使用 [v1.0.0-rc.2 Windows 免安裝候選版](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.2/LinePort-v1.0.0-rc.2-Windows-x64.zip)，全部解壓後雙擊 LinePort.exe。本次新文字到一般目的與 Bot 目的各一次已驗收；完整重啟與長時間運作仍待驗證，詳見[使用與更新說明](PORTABLE.md)。不需要另外安裝 .NET 或 AI API。
 
 ## 安裝與啟動
 
-原始碼使用者可下載 [候選版原始碼](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.1/LinePort-v1.0.0-rc.1.zip)，依[版本說明](RELEASE-1.0.0-rc.1.md)核對 SHA-256。在專案資料夾的檔案總管網址列輸入 `powershell`：
+原始碼使用者可下載 [候選版原始碼](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.2/LinePort-v1.0.0-rc.2.zip)，依[版本說明](RELEASE-1.0.0-rc.2.md)核對 SHA-256。在專案資料夾的檔案總管網址列輸入 `powershell`：
 
 ```powershell
 cd yomi-probe

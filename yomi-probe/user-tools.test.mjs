@@ -31,15 +31,27 @@ test('preview independently reports Telegram size limits and rejects invalid rul
   input.config.rules[0].destinations.push(input.config.rules[0].sources[0]);
   assert.throws(() => previewRules(input), /相同/);
 });
+test('diagnostics allowlist destination protection modes', () => {
+  const result = safeDiagnostics({ phase: 'running', routes: [
+    { lineProtection: 'transport' }, { lineProtection: 'e2ee' }, { lineProtection: 'PRIVATE_DATA' },
+  ] }, true);
+  assert.equal(result.routes[0].lineProtection, 'transport');
+  assert.equal(result.routes[1].lineProtection, 'e2ee');
+  assert.equal(result.routes[2].lineProtection, undefined);
+  assert.ok(!JSON.stringify(result).includes('PRIVATE_DATA'));
+});
+
 test('diagnostics allowlists counts and phases, excluding secrets, identity, text and errors', () => {
   const secret = 'SYNTHETIC_PRIVATE_DATA';
   const result = safeDiagnostics({ phase: 'running', stage: secret, token: secret, warning: secret, forwarded: 1, errors: -1,
-    routes: [{ name: secret, source: { id: secret }, text: secret, phase: secret, stage: secret, pending: 3, warning: secret }, { phase: 'failed', stage: 'destination_e2ee' }] }, true);
+    routes: [{ name: secret, source: { id: secret }, text: secret, phase: secret, stage: secret, pending: 3, warning: secret, failureReason: secret }, { phase: 'failed', stage: 'destination_e2ee', failureReason: 'missing_receiver_key' }, { stage: 'destination_e2ee', failureReason: secret }] }, true);
   assert.ok(!JSON.stringify(result).includes(secret));
-  assert.equal(result.appVersion, '1.0.0-rc.1');
+  assert.equal(result.appVersion, '1.0.0-rc.2');
   assert.equal(result.stage, 'unknown');
   assert.equal(result.routes[0].stage, 'unknown');
   assert.equal(result.routes[1].stage, 'destination_e2ee');
+  assert.equal(result.routes[1].failureReason, 'missing_receiver_key');
+  assert.equal(result.routes[2].failureReason, 'unknown');
   assert.equal(result.routes[0].pending, 3);
   assert.equal(result.routes[0].phase, 'unavailable');
   assert.equal(result.totals.errors, 0);
@@ -47,7 +59,7 @@ test('diagnostics allowlists counts and phases, excluding secrets, identity, tex
 test('settings export strips unknown credentials and validates format and cycles', () => {
   const value = config(); value.token = 'SYNTHETIC_SECRET'; value.rules[0].token = 'SYNTHETIC_SECRET';
   const backup = settingsBackup(value);
-  assert.equal(backup.appVersion, '1.0.0-rc.1');
+  assert.equal(backup.appVersion, '1.0.0-rc.2');
   assert.ok(!JSON.stringify(backup).includes('SYNTHETIC_SECRET'));
   assert.deepEqual(validateBackup(backup), config());
   assert.throws(() => validateBackup({ ...backup, version: 2 }), /格式/);
