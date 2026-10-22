@@ -1,10 +1,12 @@
 ## 最新：v1.0.0-rc.1 候選版（2026-10-22）
 
-使用者希望確定可用後發布 v1.0，並明確回覆朋友尚未完成 v0.8.7 實機測試。本輪準備以 v1.0.0-rc.1 prerelease 發布，不將自動化測試當作正式版實機驗收，歷史版本保留。
+使用者希望確定可用後發布 v1.0，並明確回覆朋友尚未完成 v0.8.7 實機測試。本輪已以 v1.0.0-rc.1 prerelease 發布，不將自動化測試當作正式版實機驗收，歷史版本保留。
 
 修正冷啟動遺失身分：server 成功啟動後只保存協定身分到 LOCALAPPDATA/LinePort/launcher-device.json，不讀取或複製憑證；一般啟動器優先沿用執行中身分，否則讀取上次選擇，明確參數可覆寫。損壞偏好不靜默退回桌面身分。換版前與停止前核對 busy／phase，授權或其他操作進行中拒絕換版；正確比較 rc 與正式版並阻擋降版。新服務啟動失敗不會自動退回舊版，限制已明載。版本、匯出、EXE 與現行使用文件對齊，保留兩個一般登入入口及 iPad 實驗定位。
 
 原始碼與新免安裝套件各 261 項測試全部通過，0 失敗／跳過；套件 PATH 僅含內附 Node.js 與 Windows 系統目錄。EXE --verify-package exit 0，含空白路徑的隔離 launcher fixture 派送及內附 runtime 選用通過。未操作正式服務、讀取真實憑證或發送平台訊息。發布資產為 Windows x64 ZIP、原始碼 ZIP 與 SHA256SUMS.txt。實機待驗項目：雙擊啟動、每個目的實際收到新訊息、完整程序／Windows 重啟後可轉送且不重送成功訊息、官方電腦 LINE 同時正常使用。取得結果後才決定正式 v1.0。
+
+發布確認：2026-10-22 14:54（台灣），[v1.0.0-rc.1](https://github.com/b40609/LinePort/releases/tag/v1.0.0-rc.1)，tag 指向 f01262adf11fa74c2b04b5088dcd17a74aed556c；公開非 draft、prerelease=true，穩定最新版仍為 v0.8.7。Windows ZIP 253625027 bytes，SHA-256 abc44f23eefd4a30b38b81b252357d6aa3b167207c62a4403b739cc4ed0bcc1f；原始碼 ZIP 703443 bytes，SHA-256 602fbc8d1cbee004865eda150bc5e21bc52cd26f5889978285ff5ae4abfd7230。三個上傳資產（含校驗檔）的 GitHub digest 均與本機一致；Windows ZIP CRC 檢查通過，77 個套件內來源檔逐一與 release commit 核對相符。最終 EXE ProductVersion 含相同 commit，套件完整性檢查 exit 0。
 
 ## 歷史：v0.8.7 Windows 免安裝啟動器（2026-10-22）
 
