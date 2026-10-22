@@ -41,6 +41,7 @@ function Get-CimInstance { param($ClassName,$Filter)
  [pscustomobject]@{Name='node.exe';ProcessId=if($entry -eq 'server.mjs'){123}else{124};CommandLine='"${process.execPath}" "'+(Join-Path ${quote(old)} $entry)+'"'}
 }
 function Invoke-RestMethod { param($Uri,$Method,$Headers,$ContentType,$Body,$TimeoutSec)
+ if($Uri -eq 'http://127.0.0.1:18765/api/status' -and $Method -eq 'Get') { return [pscustomobject]@{busy=$false;phase='connected'} }
  if($Uri -ne 'http://127.0.0.1:18765/api/relay/stop' -or $Headers['X-Probe-Token'] -ne '${'a'.repeat(64)}' -or $Method -ne 'Post') { throw 'Invalid stop request' }
  $global:apiCalls++; $global:relay=$false
 }
@@ -62,11 +63,35 @@ Write-Output 'upgraded'`);
   assert.match(stdout, /upgraded/);
 });
 
+test('upgrade preserves an idle relay and UI during phone authorization', { skip: process.platform !== 'win32' }, async () => {
+  const { mocks, target, html } = await fixture();
+  const { stdout } = await run(`${mocks}
+$global:relay=$false
+function Invoke-RestMethod { [pscustomobject]@{busy=$true;phase='waiting_pin'} }
+try { Update-LinePortService ${quote(html)} ${quote(target)}; throw 'Expected busy rejection' } catch { if($_ -notmatch 'authorization is in progress') { throw } }
+if(!$global:ui -or $global:stopCalls) { throw 'Old UI was stopped' }
+Write-Output 'retained'`);
+  assert.match(stdout, /retained/);
+});
+
+test('release candidates compare below the final release and use numeric candidate ordering', { skip: process.platform !== 'win32' }, async () => {
+  const { stdout } = await run(`. ${quote(path.join(root, 'upgrade-service.ps1'))}
+if((Compare-LinePortVersion '0.8.7' '1.0.0-rc.1') -ge 0) { throw 'Upgrade blocked' }
+if((Compare-LinePortVersion '1.0.0-rc.9' '1.0.0-rc.10') -ge 0) { throw 'Candidate ordering invalid' }
+if((Compare-LinePortVersion '1.0.0' '1.0.0-rc.1') -le 0) { throw 'Final release can be downgraded' }
+if((Compare-LinePortVersion '1.0.0-rc.1' '1.0.0') -ge 0) { throw 'Final upgrade blocked' }
+Write-Output 'ordered'`);
+  assert.match(stdout, /ordered/);
+});
+
 test('upgrade preserves old UI when stopping relay fails', { skip: process.platform !== 'win32' }, async () => {
   const { mocks, target, html } = await fixture();
   const { stdout } = await run(`${mocks}
-function Invoke-RestMethod { throw 'Busy login fixture' }
-try { Update-LinePortService ${quote(html)} ${quote(target)}; throw 'Expected stop rejection' } catch { if($_ -notmatch 'Busy login fixture') { throw } }
+function Invoke-RestMethod { param($Uri,$Method,$Headers,$ContentType,$Body,$TimeoutSec)
+ if($Method -eq 'Get') { return [pscustomobject]@{busy=$false;phase='connected'} }
+ throw 'Relay stop fixture failure'
+}
+try { Update-LinePortService ${quote(html)} ${quote(target)}; throw 'Expected stop rejection' } catch { if($_ -notmatch 'Relay stop fixture failure') { throw } }
 if(!$global:ui -or $global:stopCalls) { throw 'Old UI was stopped' }
 Write-Output 'retained'`);
   assert.match(stdout, /retained/);

@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { authorized, readJson, localRequest, hardenServer, HttpError } from './local-http.mjs';
 import { prepareDataDirectory } from './runtime.mjs';
 import { lineDevice } from './line-device.mjs';
+import { saveLauncherDevice } from './launcher-preference.mjs';
 import { prepareDeviceRestart, stagedListen } from './device-restart.mjs';
 import { loginDiagnostic, loginFailureMessage } from './login-diagnostics.mjs';
 import { QrLoginError } from './qr-login.mjs';
@@ -401,6 +402,7 @@ const { runQrLogin } = await import('./qr-login.mjs');
 const server = createProbeServer({ service: guardLineSession(new LineProtocolService()), runPwlessLogin, runQrLogin, prepareRestart: prepareDeviceRestart, onRestarted: () => process.exit(0), relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
 await stagedListen(server, lineDevice().id);
+await saveLauncherDevice(lineDevice().id).catch(() => print('Could not save device preference; select the same identity on the next launch.'));
 print('LinePort: http://127.0.0.1:18765/');
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

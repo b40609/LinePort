@@ -2,13 +2,13 @@
 
 在 Windows 背景轉送 LINE 與 Telegram 訊息。支援多來源、多目的、指定發訊者、內容篩選及選用的 Discord 文字目的。
 
-**Windows 使用者：[下載免安裝版 v0.8.7](https://github.com/b40609/LinePort/releases/download/v0.8.7/LinePort-v0.8.7-Windows-x64.zip)，全部解壓縮後雙擊 `LinePort.exe`。** 已包含執行環境，不用安裝 Node.js 或輸入指令；更新會自動停止並切換可辨識的舊服務，保留登入與規則。[啟動與更新說明](docs/PORTABLE.md)
+**測試新版：[下載 v1.0.0-rc.1 Windows 免安裝候選版](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.1/LinePort-v1.0.0-rc.1-Windows-x64.zip)，全部解壓縮後雙擊 `LinePort.exe`。** 已包含執行環境，不用安裝 Node.js 或輸入指令；更新會自動停止並切換可辨識的舊服務，保留登入與規則，重開後記住所選身分。[啟動與更新說明](docs/PORTABLE.md)
 
-v0.8.6 修正群組 E2EE 初始化、多代金鑰選擇、iPad QR 最終授權逾時及登入保存／恢復檢查，251 項自動化測試通過。[修正與驗證](docs/RELEASE-0.8.6.md)
+**目前為候選版，尚未完成朋友端實機驗收，不是 v1.0 正式版。** 請確認雙擊啟動、目的端實際收到轉送、完整關閉重開後可轉送，以及官方電腦版 LINE 同時收發正常。[候選版說明與驗收步驟](docs/RELEASE-1.0.0-rc.1.md)
 
-v0.8.5 改善首次使用流程：依序連結帳號、設定規則、啟動轉送；LINE 聊天室與指定成員自動載入，加入規則刪除與未保存草稿提醒，並統一主要按鈕樣式。219 項自動化測試通過。[本次更新](docs/RELEASE-0.8.5.md)
+包含 QR 登入保存、群組加密及多代金鑰修正；首次使用依序連結帳號、設定規則、啟動轉送，聊天室與指定成員自動載入。iPad 是可選協定身分，用於嘗試保留官方桌面 LINE，無需實體 iPad；原有桌面授權仍保留。不同帳號與裝置組合仍需驗收。[身分選擇與限制](docs/COMPATIBILITY.md)
 
-[下載 v0.8.7 原始碼](https://github.com/b40609/LinePort/releases/download/v0.8.7/LinePort-v0.8.7.zip) · [更新與 SHA-256](docs/RELEASE-0.8.7.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
+[候選版原始碼](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.1/LinePort-v1.0.0-rc.1.zip) · [更新與 SHA-256](docs/RELEASE-1.0.0-rc.1.md) · [先前版本 v0.8.7](https://github.com/b40609/LinePort/releases/tag/v0.8.7) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
 
 [手機示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-mobile-0.7.jpg)（v0.7.2 歷史畫面；名稱、ID、訊息均為假資料）。
 
@@ -72,7 +72,7 @@ npm.cmd start
 
 選擇後按「切換身分並重啟服務」，頁面會自動重新整理。請先保存編輯並停止轉送；操作未完成時不可切換。**各身分的登入、E2EE、平台連結、規則與轉送紀錄分開保存**，切換不會複製憑證、自動登入或啟動轉送。也可使用根目錄的 `啟動iPad實驗模式.cmd` 或原有桌面啟動器。
 
-一般啟動器會重用目前執行中的模式；完全停止後，未指定身分的啟動仍預設 `DESKTOPMAC`。要直接重開實驗模式，請用對應啟動器。不得把 Windows 身分尚未實測的共存能力當作保證；若使用者同時需要保留多台官方裝置，仍須逐組驗收。[選擇方式與相容性矩陣](docs/COMPATIBILITY.md)
+一般啟動器優先重用目前執行中的模式；v1.0.0-rc.1 起完整停止後會沿用最後成功啟動的身分，首次使用才預設 `DESKTOPMAC`。對應啟動器可明確指定身分。不得把 Windows 身分尚未實測的共存能力當作保證；若使用者同時需要保留多台官方裝置，仍須逐組驗收。[選擇方式與相容性矩陣](docs/COMPATIBILITY.md)
 
 > DESKTOPWIN 僅保留底層相容性、既有啟動器與獨立資料，未做真實登入或共存驗收；一般選單及切換 API 不開放此身分。它與 DESKTOPMAC 使用相同桌面授權流程，尚無已驗證的使用優勢，不作為官方 iPad 共存建議。
 

@@ -10,7 +10,7 @@
 
 採用此身分的原因是使用者回報原桌面登入會使官方電腦版登出；推測存在追加裝置登入衝突。改用另一類身分並配合對應 QR 流程後，本次單一帳號可共存。不能據此保證 Android、官方 Mac、已登入其他 iPad／平板等所有組合，也不能將官方 App 的支援清單視為本工具已驗收。[官方裝置類型](https://help.line.me/line/smartphone/sp?contentId=20000132&lang=zh-Hant) · [官方追加裝置登出原因](https://help.line.me/line/smartphone/?contentId=50001462&lang=zh-Hant)
 
-本次沒有把預設值全面改成 iPad，亦不新增 iPhone 專用限制；目前 LinePort 主機仍只支援 Windows。macOS／Linux 執行支援屬於獨立的主機移植工作，見[相容性矩陣與設計原則](COMPATIBILITY.md)。此模式位於 `master` 原始碼，既有 v0.8.3 發布 ZIP 尚未包含。
+本次沒有把預設值全面改成 iPad，亦不新增 iPhone 專用限制；目前 LinePort 主機仍只支援 Windows。macOS／Linux 執行支援屬於獨立的主機移植工作，見[相容性矩陣與設計原則](COMPATIBILITY.md)。目前免安裝候選版已包含此模式；下載與驗收見 [v1.0.0-rc.1 說明](RELEASE-1.0.0-rc.1.md)。
 
 一般帳號連結頁只提供 **原有桌面授權（DESKTOPMAC）** 與 **iPad QR 登入（IOSIPAD，實驗）**。要保留官方電腦版時先選本次實測的 iPad QR；沿用既有登入與設定則選原有桌面授權，後者可能使官方電腦版登出。需要保留官方 iPad LINE 時，目前沒有已驗證方案，可另行驗收原有桌面授權。選擇不依主機或手機品牌決定，無需實體 iPad／Mac。
 

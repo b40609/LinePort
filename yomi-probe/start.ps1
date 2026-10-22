@@ -2,6 +2,7 @@
 $ErrorActionPreference = 'Stop'
 $explicitDevice = $PSBoundParameters.ContainsKey('Device')
 . (Join-Path $PSScriptRoot 'upgrade-service.ps1')
+if (!$explicitDevice) { $Device = Get-LinePortPreferredDevice }
 function Confirm-ProbeDevice($html) {
     $runningDevice = 'DESKTOPMAC'
     if ($html -match '<meta name="lineport-device" content="([A-Z]+)">') { $runningDevice = $Matches[1] }

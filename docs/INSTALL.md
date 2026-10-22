@@ -4,13 +4,13 @@
 
 ## 環境
 
-Windows 11、Node.js 與 npm；已驗證 Node.js 26.4.0。一台持續連網、不休眠的電腦。使用 LINE 時需主要裝置授權；只用 Telegram 時不需要 LINE 登入。主要裝置不限定 iPhone；主機與 LINE 登入身分的差別見[相容性矩陣](COMPATIBILITY.md)。macOS／Linux 主機尚未支援。
+Windows 11 x64。免安裝版內含執行環境；只有原始碼使用者才需要 Node.js 與 npm（已驗證 Node.js 26.4.0）。一台持續連網、不休眠的電腦。使用 LINE 時需主要裝置授權；只用 Telegram 時不需要 LINE 登入。主要裝置不限定 iPhone；主機與 LINE 登入身分的差別見[相容性矩陣](COMPATIBILITY.md)。macOS／Linux 主機尚未支援。
 
-目前提供原始碼，沒有 EXE 安裝檔，不需要 .NET 或 AI API。
+一般使用者請下載 [v1.0.0-rc.1 Windows 免安裝候選版](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.1/LinePort-v1.0.0-rc.1-Windows-x64.zip)，全部解壓後雙擊 LinePort.exe。候選版待實機驗收，詳見[使用與更新說明](PORTABLE.md)。不需要另外安裝 .NET 或 AI API。
 
 ## 安裝與啟動
 
-下載 [v0.8.3 ZIP](https://github.com/b40609/LinePort/releases/download/v0.8.3/LinePort-v0.8.3.zip)（先依 [更新說明](RELEASE-0.8.3.md) 核對 SHA-256）並解壓縮。需要登入身分選單及實驗模式，請改用 [master 原始碼 ZIP](https://github.com/b40609/LinePort/archive/refs/heads/master.zip)，既有發布 ZIP 尚未包含。在專案資料夾的檔案總管網址列輸入 `powershell`：
+原始碼使用者可下載 [候選版原始碼](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.1/LinePort-v1.0.0-rc.1.zip)，依[版本說明](RELEASE-1.0.0-rc.1.md)核對 SHA-256。在專案資料夾的檔案總管網址列輸入 `powershell`：
 
 ```powershell
 cd yomi-probe
@@ -27,15 +27,15 @@ npm.cmd start
 
 開啟 http://127.0.0.1:18765/：
 
-1. 使用 LINE：在「帳號連結」選身分，先保存編輯及停止轉送，再按「切換身分並重啟服務」。各身分的登入、平台連結、規則與紀錄分開保存，切換後不會自動登入／啟動轉送。桌面身分輸入手機號碼申請主要裝置授權；iPad 身分按 QR 登入並以主要裝置掃碼、完成 PIN／授權。已有同身分登入則按「使用已保存的登入」。
-2. 按「載入 LINE 群組與好友」。只有已加入群組及好友會出現。
+1. 使用 LINE：在「帳號連結」選身分，先保存編輯及停止轉送，再按「切換身分並重啟服務」。各身分的登入、平台連結、規則與紀錄分開保存，切換後不會自動登入／啟動轉送。桌面身分輸入手機號碼申請主要裝置授權；iPad 身分按 QR 登入並以主要裝置掃碼、完成 PIN／授權。已有同身分登入會自動恢復；失敗時依頁面提示重試。
+2. 登入後自動載入 LINE 群組與好友；只有已加入群組及好友會出現。
 3. 使用 Telegram：連結自己的 Bot Token，依 [Telegram 設定](USAGE.md#telegram) 授予聊天室權限。
 4. 在「轉送規則」新增規則，依序選來源與發訊者、目的與訊息條件，確認預覽後保存。
 5. 開始轉送，基準完成後發新文字，確認各目的收到。
 
 也可雙擊專案根目錄 `啟動一般群組驗證.cmd` 啟動；舊檔名保留相容性。手機沒有授權提示時見 [疑難排解](TROUBLESHOOTING.md)。
 
-一般啟動器會開啟目前執行中的模式。完全停止後預設為原有桌面身分；要直接重開實驗模式，請使用 `啟動iPad實驗模式.cmd`。其他模式仍在執行時，指定模式啟動器會拒絕重用，請回帳號頁切換。
+一般啟動器會開啟目前執行中的模式。v1.0.0-rc.1 起完整停止後會記住最後成功啟動的身分；首次使用才預設為原有桌面身分。要指定重開實驗模式，可使用 `啟動iPad實驗模式.cmd`。其他模式仍在執行時，指定模式啟動器會拒絕重用，請回帳號頁切換。
 
 ## 分享
 

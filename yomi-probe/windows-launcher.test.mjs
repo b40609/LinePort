@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,11 +11,16 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const execute = promisify(execFile);
 const shell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
 const quote = value => "'" + value.replaceAll("'", "''") + "'";
-const run = (command, options = {}) => execute(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], { windowsHide: true, timeout: 15000, ...options });
+const version = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
+const isolatedProfile = await mkdtemp(path.join(os.tmpdir(), 'lineport-launcher-profile-'));
+const run = (command, options = {}) => execute(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], { windowsHide: true, timeout: 15000, env: { ...process.env, LOCALAPPDATA: isolatedProfile }, ...options });
+const ownership = `function Get-NetTCPConnection { [pscustomobject]@{OwningProcess=123} }
+function Get-CimInstance { [pscustomobject]@{ProcessId=123;Name='node.exe';CommandLine=${quote('"C:\\node.exe" "' + path.join(root, 'server.mjs') + '"')}} }`;
 
 test('launcher recognizes current and previous titles without starting another server', { skip: process.platform !== 'win32' }, async () => {
   for (const title of ['LinePort', 'LINE Relay Bridge']) {
-    const { stdout } = await run(`function Invoke-WebRequest { [pscustomobject]@{Content='<title>${title}</title><input id="phone">'} }
+    const { stdout } = await run(`${ownership}
+function Invoke-WebRequest { [pscustomobject]@{Content='<title>${title}</title><input id="phone"><span>v${version} · LINE</span>'} }
 function Start-Process { param($FilePath) if ($FilePath -ne 'http://127.0.0.1:18765/') { throw 'Unexpected server launch' }; Write-Output 'opened' }
 & ${quote(path.join(root, 'start.ps1'))}`);
     assert.match(stdout, /opened/);
@@ -24,7 +29,8 @@ function Start-Process { param($FilePath) if ($FilePath -ne 'http://127.0.0.1:18
 
 test('launcher reuses the running mode unless an explicit device conflicts', { skip: process.platform !== 'win32' }, async () => {
   for (const device of ['IOSIPAD', 'DESKTOPWIN']) {
-  const mocks = `function Invoke-WebRequest { [pscustomobject]@{Content='<title>LinePort</title><input id="phone"><meta name="lineport-device" content="${device}">'} }
+  const mocks = `${ownership}
+function Invoke-WebRequest { [pscustomobject]@{Content='<title>LinePort</title><input id="phone"><meta name="lineport-device" content="${device}"><span>v${version} · LINE</span>'} }
 function Start-Process { param($FilePath) if ($FilePath -ne 'http://127.0.0.1:18765/') { throw 'Unexpected server launch' }; Write-Output 'opened' }`;
   const reused = await run(`${mocks}\n& ${quote(path.join(root, 'start.ps1'))}`);
   assert.match(reused.stdout, /opened/);
@@ -51,6 +57,31 @@ function Start-Process { param($FilePath, $ArgumentList, $WorkingDirectory, $Win
 & ${quote(path.join(root, 'start.ps1'))} -Device IOSIPAD
 if($env:LINEPORT_LINE_DEVICE -ne 'DESKTOPMAC') { throw 'Environment leaked' }`);
   assert.match(stdout, /inherited/);
+});
+
+test('cold start uses the saved identity and an explicit choice overrides it', { skip: process.platform !== 'win32' }, async () => {
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'lineport-cold-start-'));
+  await mkdir(path.join(profile, 'LinePort'));
+  await writeFile(path.join(profile, 'LinePort/launcher-device.json'), JSON.stringify({ device: 'IOSIPAD' }));
+  for (const [arguments_, expected] of [['', 'IOSIPAD'], ['-Device DESKTOPMAC', 'DESKTOPMAC']]) {
+    const { stdout } = await run(`$global:probeCalls=0
+function Invoke-WebRequest { $global:probeCalls++; if($global:probeCalls -eq 1) { throw 'offline fixture' }; [pscustomobject]@{Content='<title>LinePort</title><input id="phone"><meta name="lineport-device" content="${expected}">'} }
+function Start-Sleep {}
+function Start-Process { param($FilePath,$ArgumentList,$WorkingDirectory,$WindowStyle)
+ if($FilePath -eq 'http://127.0.0.1:18765/') { return }
+ if($env:LINEPORT_LINE_DEVICE -ne '${expected}') { throw 'Wrong cold-start identity' }
+ Write-Output 'selected'
+}
+& ${quote(path.join(root, 'start.ps1'))} ${arguments_}`, { env: { ...process.env, LOCALAPPDATA: profile } });
+    assert.match(stdout, /selected/);
+  }
+});
+
+test('launcher retains an unversioned service without stopping or replacing it', { skip: process.platform !== 'win32' }, async () => {
+  await assert.rejects(run(`function Invoke-WebRequest { [pscustomobject]@{Content='<title>LinePort</title><input id="phone">'} }
+function Stop-Process { throw 'Unexpected stop' }
+function Start-Process { throw 'Unexpected replacement' }
+& ${quote(path.join(root, 'start.ps1'))}`), /Cannot identify the running version/);
 });
 
 test('launcher reports missing QR dependencies before spawning a server', { skip: process.platform !== 'win32' }, async () => {
