@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$OutputDirectory)
+﻿param([Parameter(Mandatory = $true)][string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 if (Test-Path -LiteralPath $OutputDirectory) { throw 'Choose a new output directory; existing files are never overwritten.' }
