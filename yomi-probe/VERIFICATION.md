@@ -1,3 +1,26 @@
+## 2026-10-22：v1.0.0-rc.3 登入自動啟動、打包與發布驗證
+
+使用者要求把登入自動啟動做成產品功能（安裝精靈選項＋頁面兩個開關），預設啟用、可取消、不強制。實作提交 `3c85444e935c31819ad03fa0ba3e00dedb24ddc9`，annotated tag `v1.0.0-rc.3`（tag 物件 `53027900768c4f7b3588e64dcac76d4572e4138b`），master 已推送 `f18f71e..3c85444`。
+
+原始碼 `npm.cmd test`：282 通過、0 失敗／跳過；套件內附 runtime（`runtime\node.exe --test`、32 個測試檔）同樣 282 通過、0 失敗。新增涵蓋偏好正規化與原子寫入、兩份登入腳本冪等、Startup 捷徑建立／移除與參數、設定頁兩個開關、HTTP 介面、安裝精靈預設工作、升級不覆寫偏好、解除安裝清理。
+
+建置：`scripts/Build-Portable.ps1` 產生 `dist/LinePort-v1.0.0-rc.3-Windows-x64`，EXE ProductVersion `1.0.0-rc.3+3c85444e935c31819ad03fa0ba3e00dedb24ddc9`，79 個內附來源檔與提交逐一相符，`--verify-package` exit 0；安裝版以 Inno Setup 6.7.3 編譯。Windows ZIP 解壓 4,647 檔逐一雜湊相符。
+
+隔離安裝（不註冊、不建捷徑、不啟動服務模式）：rc.1 升級、同版修復改用另一新目錄、安裝內容全部雜湊相符、舊版本目錄保留、已有 9.0.0 時拒絕降版。
+
+登入自動啟動（同一隔離安裝）：靜默安裝預設工作 → `HKCU\Software\LinePort\AutostartTask` = `enabled`；首次啟動 seed 邏輯（直接呼叫 `seedFromInstallerTask`）在偏好檔不存在時寫入 `{"service":true,"relay":true}`，並經 store.apply 建立 `LinePort 自動啟動.lnk` 與 `LinePort 自動啟動 轉送.lnk`。使用者關閉兩個開關後再升級，偏好檔不被覆寫、不重新啟用。`/TASKS="!autostart"` 安裝 → 登錄值 `disabled`，首啟不 seed、不建立捷徑。解除安裝清除登錄值、兩個 Startup 捷徑、`autostart-service.ps1`、`autostart-relay.ps1` 與 `autostart.json`，日誌確認刪除（登錄值先移除、檔案約 10 秒後刪除，驗證以檔案消失為準）。
+
+21:34（台灣）[v1.0.0-rc.3](https://github.com/b40609/LinePort/releases/tag/v1.0.0-rc.3) 已公開，draft=false、prerelease=true、make_latest=false，四份資產齊全，`/releases/latest` 仍為 v1.0.0-rc.2。發布後唯讀複核：版本頁與 `SHA256SUMS.txt` 下載點 HTTP 200；重新下載摘要檔 303 bytes、SHA-256 `d4a65ec5c3bbcfe2148a6224d4a5ef25a2ba0e72fbc97e47c36cac8c13996717` 與本機一致。
+
+| 資產 | bytes | SHA-256 |
+| --- | ---: | --- |
+| Windows x64 Setup.exe | 165690011 | a25e7e22f968a946a5a58441e48d0d07c3f8b7fb49cfb88698ae6c199fee065f |
+| Windows x64 ZIP | 253930562 | 2b2c90793a58ecce17c790aba56d08eedfd21ec724aa67cdf0ebdb5fefda6e4d |
+| 原始碼 ZIP | 740734 | c088b16e0eb7f0d3def990af9cba6bbc32dc4406e6f136e0c303839769d431ce |
+| SHA256SUMS.txt | 303 | d4a65ec5c3bbcfe2148a6224d4a5ef25a2ba0e72fbc97e47c36cac8c13996717 |
+
+本機紀錄：`%TEMP%/lineport-rc3-build-portable.log`、`lineport-rc3-release.log`、`lineport-rc3-verify.log`、`lineport-rc3-package.log`；隔離安裝資料保留於 `%LOCALAPPDATA%/LP3-3b691b9f`。驗證後已還原使用者環境：客製的 Startup `LinePort.lnk`／`LinePort 轉送.lnk` 與 `%LOCALAPPDATA%/LinePort` 原檔均在，`HKCU\Software\LinePort` 已移除，已安裝的 rc.2 未受影響，正式服務未重啟。仍未驗證：完整 Windows 重啟後登入自動啟動的實際行為、長時間運作、媒體與其他帳號／裝置組合。
+
 ## 2026-10-22：v1.0.0-rc.2 打包、安裝與發布資產驗證
 
 16:39（台灣）公開發布 [v1.0.0-rc.2](https://github.com/b40609/LinePort/releases/tag/v1.0.0-rc.2)，draft=false、prerelease=true；四個資產均已上傳，穩定最新版仍為 v0.8.7。

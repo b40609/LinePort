@@ -1,4 +1,14 @@
-## 最新：使用者授權更新 GitHub 並封裝 EXE（2026-10-22）
+## 最新：登入自動啟動產品化與 v1.0.0-rc.3 發布（2026-10-22，台灣）
+
+使用者要求把「登入自動啟動（可選）」做成產品功能再開一輪實作：安裝精靈選項預設勾選且可取消、設定頁兩個獨立開關（啟動介面服務／自動開始轉送），預設啟用但不強制。實作提交 `3c85444e935c31819ad03fa0ba3e00dedb24ddc9`，tag `v1.0.0-rc.3`，master 已推送。
+
+偏好存 `%LOCALAPPDATA%/LinePort/autostart.json`（只有兩個布林）。安裝精靈的選擇寫入 `HKCU\Software\LinePort\AutostartTask`，伺服器首啟且偏好檔不存在時才 seed，因此升級不會覆寫使用者選擇。登入腳本 `autostart-service.ps1`／`autostart-relay.ps1` 放在 `%LOCALAPPDATA%/LinePort`（版本目錄之外，升級不需重建），Startup 兩個捷徑指向它們，腳本不寫入 token。解除安裝清除兩個捷徑、兩份腳本、偏好檔與登錄值。免安裝版不受安裝工作影響，預設關閉。
+
+原始碼 282 項測試與套件內附 runtime 282 項全數通過；隔離安裝（rc.1 升級、同版修復、完整雜湊、保留舊版、防降版）、自動啟動工作、升級不重開與解除安裝清理均已驗證。21:34（台灣）[v1.0.0-rc.3](https://github.com/b40609/LinePort/releases/tag/v1.0.0-rc.3) 已公開，draft=false、prerelease=true、make_latest=false，四份資產齊全；最新穩定版維持 v1.0.0-rc.2，待使用者重啟驗收後再升 v1.0.0。明細見 yomi-probe/VERIFICATION.md。
+
+使用者目前的登入自動啟動仍是本機客製（Startup 兩個 .lnk 指向 `%LOCALAPPDATA%/LinePort/autostart-*.ps1`）。安裝 rc.3 時勾選精靈選項或在設定頁開啟後，應移除客製捷徑與腳本，避免登入時重複啟動。完整 Windows 重啟、長時間運作、媒體與其他帳號／裝置組合仍未驗證。
+
+## 歷史：使用者授權更新 GitHub 並封裝 EXE（2026-10-22）
 
 使用者新指示「更新到Github 記得打包成exe」，已取代暫緩封裝限制。本輪以 v1.0.0-rc.2 發布 Bot 目的文字相容與多代金鑰恢復修補，新增 Windows 安裝版並保留免安裝版。實機文字收件驗收已通過；完整重啟及長期運作未宣稱通過。正式服務持續運作，打包在獨立目錄進行。
 
