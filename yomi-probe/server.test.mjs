@@ -190,7 +190,7 @@ test('home has nonce CSP, no-store and no unresolved placeholders', async t => {
   assert.match(result.headers['content-security-policy'], /script-src 'nonce-/);
   assert.equal(result.headers['cache-control'], 'no-store');
   assert.ok(!result.body.includes('__TOKEN__') && !result.body.includes('__NONCE__'));
-  assert.match(result.body, /v0\.8\.6 · LINE · Telegram/);
+  assert.match(result.body, /v0\.8\.7 · LINE · Telegram/);
   assert.match(result.body, /releases\/tag\/v0\.8\.5/);
 });
 test('isolated HTTP download, backup validation and restore preserve pre-restore settings', async t => {
@@ -216,9 +216,9 @@ test('isolated HTTP download, backup validation and restore preserve pre-restore
   }
   const backup = JSON.parse(backupReply.body);
   const diagnostics = JSON.parse(diagnosticReply.body);
-  assert.equal(backup.appVersion, '0.8.6');
+  assert.equal(backup.appVersion, '0.8.7');
   assert.deepEqual(backup.config, original);
-  assert.equal(diagnostics.appVersion, '0.8.6');
+  assert.equal(diagnostics.appVersion, '0.8.7');
   assert.equal(diagnostics.stage, 'unknown');
   assert.equal(diagnostics.routes[0].stage, 'destination_e2ee');
   assert.deepEqual(Object.keys(diagnostics.routes[0]).sort(), ['errors', 'forwarded', 'pending', 'phase', 'route', 'skipped', 'stage', 'uncertain']);

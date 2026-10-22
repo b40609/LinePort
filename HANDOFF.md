@@ -1,4 +1,10 @@
-## 最新：v0.8.6 QR 全流程及多代金鑰修正（2026-10-22）
+## 最新：v0.8.7 Windows 免安裝啟動器（2026-10-22）
+
+使用者要求免除手動關閉舊服務與開發工具操作。新增自含 .NET 的 LinePort.exe、內附 Node.js 及 npm 固定依賴的 Windows x64 套件；scripts/Build-Portable.ps1 使用 Git 白名單打包並附 runtime 授權文件。start.ps1 驗證舊版 PID、命令列、套件來源及版本，先停止轉送，再替換介面；拒絕不明程序、停止失敗及降版。執行中的登入身分由頁面 metadata 延續，冷啟動維持原預設與帳號頁選擇，不假設所有使用者選 iPad。
+
+免安裝套件在 PATH 僅含內附 Node.js 與 Windows 系統目錄下，255 項測試全數通過。EXE --verify-package、隔離 fixture 啟動派送及 runtime PATH 驗證通過，沒有操作真實 LINE 帳號或發送訊息。更新後須由使用者按開始轉送；不自動發送。完整解壓到新資料夾，不能只複製 EXE；尚未簽署。v0.8.6 已發布至 GitHub；本輪 v0.8.7 將以免安裝 ZIP、原始碼 ZIP 及 SHA256SUMS 發布。
+
+## 歷史：v0.8.6 QR 全流程及多代金鑰修正（2026-10-22）
 
 使用者要求自行完成網路研究及修復驗證，不讓朋友反覆排錯。核對 linejs #195/#197/#211/#229 與 Yomi 議題，未採用會輪替／重新註冊金鑰的繞法。新增 line-e2ee-state.mjs：核對每組 X25519 公私鑰，依 bootstrap 指定 key ID 選發送金鑰，保留全部代數；guardLineSession 整合前景服務及兩種背景轉送入口，核對保存 MID／實際帳號／金鑰歸屬，快取缺漏或損壞可由保存 bootstrap 唯讀恢復。QR 最終請求跨掃碼期限誤判已先重現失敗再修正；completeQrLogin 抽出真實 bootstrap 路徑，核對帳號與持久化讀回一致才報登入成功。
 

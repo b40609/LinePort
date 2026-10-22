@@ -2,11 +2,13 @@
 
 在 Windows 背景轉送 LINE 與 Telegram 訊息。支援多來源、多目的、指定發訊者、內容篩選及選用的 Discord 文字目的。
 
+**Windows 使用者：[下載免安裝版 v0.8.7](https://github.com/b40609/LinePort/releases/download/v0.8.7/LinePort-v0.8.7-Windows-x64.zip)，全部解壓縮後雙擊 `LinePort.exe`。** 已包含執行環境，不用安裝 Node.js 或輸入指令；更新會自動停止並切換可辨識的舊服務，保留登入與規則。[啟動與更新說明](docs/PORTABLE.md)
+
 v0.8.6 修正群組 E2EE 初始化、多代金鑰選擇、iPad QR 最終授權逾時及登入保存／恢復檢查，251 項自動化測試通過。[修正與驗證](docs/RELEASE-0.8.6.md)
 
 v0.8.5 改善首次使用流程：依序連結帳號、設定規則、啟動轉送；LINE 聊天室與指定成員自動載入，加入規則刪除與未保存草稿提醒，並統一主要按鈕樣式。219 項自動化測試通過。[本次更新](docs/RELEASE-0.8.5.md)
 
-[下載 v0.8.6 ZIP](https://github.com/b40609/LinePort/releases/download/v0.8.6/LinePort-v0.8.6.zip) · [更新與 SHA-256](docs/RELEASE-0.8.6.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
+[下載 v0.8.7 原始碼](https://github.com/b40609/LinePort/releases/download/v0.8.7/LinePort-v0.8.7.zip) · [更新與 SHA-256](docs/RELEASE-0.8.7.md) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
 
 [手機示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-mobile-0.7.jpg)（v0.7.2 歷史畫面；名稱、ID、訊息均為假資料）。
 

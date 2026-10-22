@@ -1,6 +1,7 @@
 ﻿param([ValidateSet('DESKTOPWIN', 'DESKTOPMAC', 'IOSIPAD')][string]$Device = 'DESKTOPMAC')
 $ErrorActionPreference = 'Stop'
 $explicitDevice = $PSBoundParameters.ContainsKey('Device')
+. (Join-Path $PSScriptRoot 'upgrade-service.ps1')
 function Confirm-ProbeDevice($html) {
     $runningDevice = 'DESKTOPMAC'
     if ($html -match '<meta name="lineport-device" content="([A-Z]+)">') { $runningDevice = $Matches[1] }
@@ -12,7 +13,11 @@ try {
     $probeResponse = Invoke-WebRequest -Uri $probeUrl -TimeoutSec 2 -UseBasicParsing
     $probeReady = ($probeResponse.Content.Contains('<title>LinePort</title>') -or $probeResponse.Content.Contains('<title>LINE Relay Bridge</title>')) -and $probeResponse.Content.Contains('id="phone"')
 } catch { }
-if ($probeReady) { Confirm-ProbeDevice $probeResponse.Content }
+if ($probeReady) {
+    Confirm-ProbeDevice $probeResponse.Content
+    if (!$explicitDevice -and $probeResponse.Content -match '<meta name="lineport-device" content="([A-Z]+)">') { $Device = $Matches[1] }
+    if (Update-LinePortService $probeResponse.Content $PSScriptRoot) { $probeReady = $false }
+}
 if (-not $probeReady) {
     $probeNode = (Get-Command node.exe -ErrorAction Stop).Source
     foreach ($dependency in @('node_modules/@rikaidev/yomi/dist/line/core/service.js', 'node_modules/qrcode/lib/index.js', 'node_modules/tweetnacl/nacl-fast.js')) {
