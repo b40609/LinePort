@@ -432,3 +432,25 @@ test('LINE directory preserves names and safe photos with fallback for empty met
   for (const picturePath of ['https://evil.example/a', '//evil.example/a', 'http://obs.line-scdn.net/a', 'https://obs.line-scdn.net:444/a', 'javascript:alert(1)', 'https://user@obs.line-scdn.net/a']) assert.equal(linePictureUrl({ picturePath }), '');
   assert.equal(linePictureUrl({ picturePath: 'https://evil.example/a', thumbnailUrl: 'https://obs.line-scdn.net/safe' }), 'https://obs.line-scdn.net/safe');
 });
+
+test('long text exceeding Telegram limits is chunked and forwarded sequentially', async () => {
+  const directory = await fixture();
+  const sent = [];
+  const telegram = {
+    identity: 'tg:bot',
+    prepare: async () => {},
+    send: async (id, text) => {
+      sent.push({ id, text });
+      return { id: `out-${sent.length}` };
+    },
+  };
+  const line = adapter({ messages: [message('long-msg', 'a'.repeat(9000), 1100)] });
+  const cfg = config(rule('r1', [endpoint('csource')], [{ platform: 'telegram', id: '-100123' }]));
+  const relay = await createMultiRelay({ config: cfg, adapters: { line, telegram }, directory, now: () => 1000, pause: async () => {} });
+  await relay.tick();
+  assert.equal(relay.state.forwarded, 1);
+  assert.equal(sent.length, 3);
+  assert.ok(sent[0].text.includes('(1/3)'));
+  assert.ok(sent[1].text.includes('(2/3)'));
+  assert.ok(sent[2].text.includes('(3/3)'));
+});

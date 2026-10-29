@@ -7,18 +7,23 @@ import { mediaPayload } from './media-payload.mjs';
 import { RelayError } from './relay-health.mjs';
 import { discordId } from './discord.mjs';
 import { botCredentials } from './bot-credentials.mjs';
+import { telegramThreadId } from './telegram-topics.mjs';
+import { renderMessageText, matchKeywordRule } from './text-template.mjs';
 
 const invalid = message => { throw new HttpError(400, message); };
-export const endpointKey = endpoint => `${endpoint.platform}:${endpoint.id}`;
+export const chatKey = endpoint => `${endpoint.platform}:${endpoint.id}`;
+export const endpointKey = endpoint => chatKey(endpoint) + (endpoint.threadId !== undefined ? `:thread:${endpoint.threadId}` : '');
 export const configRevision = config => createHash('sha256').update(JSON.stringify(config)).digest('hex');
 export function normalizeConfig(input) {
-  if (!input || input.version !== 1 || !Array.isArray(input.rules) || input.rules.length > 30) invalid('規則格式不正確，最多 30 條');
+  if (!input || ![1, 2].includes(input.version) || !Array.isArray(input.rules) || input.rules.length > 30) invalid('規則格式不正確，最多 30 條');
   const ruleIds = new Set(), edges = new Set(), graph = new Map();
   const endpoint = value => {
     if (!value || !['line', 'telegram', 'discord'].includes(value.platform) || typeof value.id !== 'string'
       || !(value.platform === 'discord' ? discordId(value.id) : (value.platform === 'line' ? /^[ucr][a-zA-Z0-9_-]{1,80}$/ : /^-?[1-9]\d{0,15}$/).test(value.id))) invalid('聊天室 ID 格式不正確');
     if (value.platform === 'telegram' && !Number.isSafeInteger(Number(value.id))) invalid('Telegram ID 超出範圍');
-    return { platform: value.platform, id: value.id, name: typeof value.name === 'string' ? value.name.slice(0, 100) : value.id };
+    if (value.threadId !== undefined && (value.platform !== 'telegram' || !telegramThreadId(value.threadId))) invalid('Telegram 話題 ID 必須為 1–2147483647 的整數，且只能用於 Telegram 目的');
+    return { platform: value.platform, id: value.id, name: typeof value.name === 'string' ? value.name.slice(0, 100) : value.id,
+      ...(value.threadId !== undefined ? { threadId: value.threadId } : {}) };
   };
   const keywords = value => {
     if (value === undefined) return [];
@@ -32,23 +37,28 @@ export function normalizeConfig(input) {
     if (typeof value.enabled !== 'boolean' || !Array.isArray(value.sources) || !Array.isArray(value.destinations)
       || !value.sources.length || !value.destinations.length || value.sources.length > 10 || value.destinations.length > 10) invalid('每條規則需有 1–10 個來源與目的');
     const sources = value.sources.map(endpoint), destinations = value.destinations.map(endpoint);
+    if (sources.some(source => source.threadId !== undefined)) invalid('Telegram 話題目前只支援轉發目的；來源請選整個聊天室');
     if (sources.some(source => source.platform === 'discord')) invalid('Discord 目前只支援純文字目的頻道；來源請選 LINE 或 Telegram');
     if ([sources, destinations].some(rows => new Set(rows.map(endpointKey)).size !== rows.length)) invalid('同一規則不可重複選取聊天室');
     if (typeof value.prefix !== 'undefined' && (typeof value.prefix !== 'string' || value.prefix.length > 200)) invalid('訊息前綴最多 200 字');
     for (const source of sources) for (const destination of destinations) {
       const from = endpointKey(source), to = endpointKey(destination);
-      if (from === to) invalid('來源與目的不可相同');
+      if (chatKey(source) === chatKey(destination)) invalid('來源與目的聊天室不可相同，即使指定不同話題');
       if (value.enabled) {
         if (++totalEdges > 100) invalid('啟用中的來源與目的配對最多 100 組');
         const key = `${from}>${to}`;
         if (edges.has(key)) invalid('不同規則有重複的來源與目的配對');
         edges.add(key);
-        if (!graph.has(from)) graph.set(from, new Set());
-        graph.get(from).add(to);
+        // Sources read the whole chat, so topic destinations must retain chat-level loop protection.
+        const fromChat = chatKey(source), toChat = chatKey(destination);
+        if (!graph.has(fromChat)) graph.set(fromChat, new Set());
+        graph.get(fromChat).add(toChat);
       }
     }
     return { id: value.id, name: typeof value.name === 'string' ? value.name.slice(0, 100) : value.id,
-      enabled: value.enabled, sources, destinations, include: keywords(value.include), exclude: keywords(value.exclude), prefix: value.prefix || '', ...normalizeOptions(value, sources, destinations) };
+      enabled: value.enabled, sources, destinations, include: keywords(value.include), exclude: keywords(value.exclude), prefix: value.prefix || '',
+      ...(typeof value.template === 'string' && value.template.trim() ? { template: value.template.slice(0, 500) } : {}),
+      ...normalizeOptions(value, sources, destinations) };
   });
   const visiting = new Set(), visited = new Set();
   function visit(node) {
@@ -59,7 +69,8 @@ export function normalizeConfig(input) {
     visiting.delete(node); visited.add(node);
   }
   for (const node of graph.keys()) visit(node);
-  return { version: 1, rules };
+  // Older releases reject version 2 instead of silently dropping a destination topic.
+  return { version: rules.some(rule => rule.destinations.some(destination => destination.threadId !== undefined)) ? 2 : 1, rules };
 }
 export function textRejection(rule, message, sourceKey, allowEmpty = false) {
   if (!senderMatches(rule, sourceKey, message)) return '非指定發訊者；請核對此來源的人員 ID';
@@ -67,19 +78,19 @@ export function textRejection(rule, message, sourceKey, allowEmpty = false) {
   if (message.protected) return '平台標示為受保護內容，不轉送';
   if (message.e2eeDecryptFailure) return '無法解密原訊息，請先確認來源可正常讀取';
   if (typeof message.text !== 'string' || !allowEmpty && !message.text.trim()) return '沒有可轉送的文字';
-  const text = message.text.toLocaleLowerCase();
-  if (rule.include.length && !rule.include.some(word => text.includes(word.toLocaleLowerCase()))) return '沒有包含任一必要關鍵字；請核對訊息格式';
-  if (rule.exclude.some(word => text.includes(word.toLocaleLowerCase()))) return '包含排除關鍵字；請核對是否誤排除有效訊息';
+  if (rule.include.length && !rule.include.some(word => matchKeywordRule(message.text, word))) return '沒有包含任一必要關鍵字；請核對訊息格式';
+  if (rule.exclude.some(word => matchKeywordRule(message.text, word))) return '包含排除關鍵字；請核對是否誤排除有效訊息';
   return null;
 }
-export function matchingText(rule, message, sourceKey) {
+export function matchingText(rule, message, sourceKey, sourceEndpoint) {
   if (textRejection(rule, message, sourceKey) !== null) return null;
-  return rule.prefix + message.text;
+  return renderMessageText({ template: rule.template, prefix: rule.prefix, message, source: sourceEndpoint, rule });
 }
-export function matchingContent(rule, message, sourceKey) {
-  if (!message.media || !rule.media) return matchingText(rule, message, sourceKey);
+export function matchingContent(rule, message, sourceKey, sourceEndpoint) {
+  if (!message.media || !rule.media) return matchingText(rule, message, sourceKey, sourceEndpoint);
   if (textRejection(rule, message, sourceKey, true) !== null) return null;
-  try { return mediaPayload({ ...message.media, caption: rule.prefix + (message.text || '') }); }
+  const caption = renderMessageText({ template: rule.template, prefix: rule.prefix, message, source: sourceEndpoint, rule });
+  try { return mediaPayload({ ...message.media, caption }); }
   catch { throw new RelayError('圖片／檔案格式、大小或說明不符限制，已暫停此路線；請核對 10／50 MB 大小及 1,024 字元說明，保留原訊息後調整規則'); }
 }
 export async function atomicJson(file, value) {
@@ -92,6 +103,7 @@ export async function atomicJson(file, value) {
 }
 export function createSettingsStore(directory, protectionOptions) {
   const configFile = path.join(directory, 'lineport-rules.json');
+  const topicsFile = path.join(directory, 'lineport-telegram-topics.json');
   const telegram = botCredentials(directory, 'telegram', atomicJson, protectionOptions);
   const discord = botCredentials(directory, 'discord', atomicJson, protectionOptions);
   return {
@@ -109,6 +121,25 @@ export function createSettingsStore(directory, protectionOptions) {
         await atomicJson(configFile, normalized);
       } catch { throw new HttpError(409, '設定還原未完成；未取代原設定，請保留已產生的備份並檢查磁碟空間與權限後重試'); }
       return { config: normalized, backup };
+    },
+    async telegramTopics() {
+      try {
+        const raw = JSON.parse(await readFile(topicsFile, 'utf8'));
+        if (!Array.isArray(raw)) return [];
+        return raw.filter(item => item && item.platform === 'telegram' && typeof item.id === 'string' && telegramThreadId(item.threadId))
+          .map(item => ({ platform: 'telegram', id: String(item.id), name: String(item.name || item.id).slice(0, 100), kind: 'group', threadId: item.threadId }));
+      } catch (error) {
+        if (error.code === 'ENOENT') return [];
+        throw error;
+      }
+    },
+    async saveTelegramTopics(topics) {
+      if (!Array.isArray(topics)) return [];
+      const valid = topics.filter(item => item && item.platform === 'telegram' && typeof item.id === 'string' && telegramThreadId(item.threadId))
+        .slice(0, 50)
+        .map(item => ({ platform: 'telegram', id: String(item.id), name: String(item.name || item.id).slice(0, 100), kind: 'group', threadId: item.threadId }));
+      await atomicJson(topicsFile, valid);
+      return valid;
     },
     telegramToken: () => telegram.token(),
     saveTelegram: (token, useProtection = false) => telegram.save(token, useProtection),

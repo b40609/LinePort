@@ -1,4 +1,4 @@
-﻿param([ValidateSet('DESKTOPWIN', 'DESKTOPMAC', 'IOSIPAD')][string]$Device = 'DESKTOPMAC')
+param([ValidateSet('DESKTOPWIN', 'DESKTOPMAC', 'IOSIPAD')][string]$Device = 'DESKTOPMAC')
 $ErrorActionPreference = 'Stop'
 $explicitDevice = $PSBoundParameters.ContainsKey('Device')
 . (Join-Path $PSScriptRoot 'upgrade-service.ps1')
@@ -28,6 +28,7 @@ if (-not $probeReady) {
     $previousDevice = $env:LINEPORT_LINE_DEVICE
     try {
         $env:LINEPORT_LINE_DEVICE = $Device
+        $env:UV_THREADPOOL_SIZE = '16'
         Start-Process -FilePath $probeNode -ArgumentList ('"' + $probeScript + '"') -WorkingDirectory $PSScriptRoot -WindowStyle Hidden
     } finally { $env:LINEPORT_LINE_DEVICE = $previousDevice }
     for ($probeAttempt = 0; $probeAttempt -lt 20; $probeAttempt++) {

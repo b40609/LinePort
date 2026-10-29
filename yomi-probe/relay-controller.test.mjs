@@ -76,3 +76,16 @@ test('route status exposes only known LINE protection modes', async () => {
   assert.deepEqual(state.routes.map(route => route.lineProtection), ['e2ee', 'transport', undefined]);
   assert.ok(!JSON.stringify(state).includes('SYNTHETIC_SECRET'));
 });
+
+test('route status preserves Telegram topic threadId', async () => {
+  const request = async () => ({ ok: true, json: async () => ({ app: 'line-relay-bridge', version: 3, phase: 'running',
+    routes: [
+      { source: { platform: 'line', id: 'c1', name: 'Line' }, destination: { platform: 'telegram', id: '-1001', name: 'TG', threadId: 53865 } },
+      { source: { platform: 'line', id: 'c1', name: 'Line' }, destination: { platform: 'telegram', id: '-1001', name: 'TG' } },
+      { source: { platform: 'line', id: 'c1', name: 'Line' }, destination: { platform: 'telegram', id: '-1001', name: 'TG', threadId: 'invalid' } },
+    ] }) });
+  const state = await createRelayController({ request }).status();
+  assert.equal(state.routes[0].destination.threadId, 53865);
+  assert.equal(state.routes[1].destination.threadId, undefined);
+  assert.equal(state.routes[2].destination.threadId, undefined);
+});

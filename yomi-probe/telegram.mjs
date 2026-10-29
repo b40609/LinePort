@@ -4,6 +4,7 @@ import { RelayError } from './relay-health.mjs';
 import { mediaPayload } from './media-payload.mjs';
 import { readJournalFile, storageHealth } from './storage-health.mjs';
 import { destinationReply } from './reply-links.mjs';
+import { telegramThreadId } from './telegram-topics.mjs';
 export class TelegramRateLimit extends RelayError {
   constructor(seconds) {
     super('Telegram 限流，等待後自動重試');
@@ -69,20 +70,23 @@ export function createTelegramClient(token, { request = fetch } = {}) {
         throw new RelayError('圖片下載或格式驗證失敗，尚未呼叫 LINE 發送；待送紀錄已保留，請檢查來源附件與連線後停止並重新啟動');
       } finally { if (reader) { try { await reader.cancel(); } catch {} reader.releaseLock(); } }
     },
-    async send(id, text, { replyTo } = {}) {
+    async send(id, text, { replyTo, threadId } = {}) {
+      if (threadId !== undefined && !telegramThreadId(threadId)) throw new RelayError('Telegram 話題 ID 不正確，請停止並修改目的話題');
       let method = 'sendMessage', data = { chat_id: id, text };
       if (typeof text !== 'string') {
         const payload = mediaPayload(text);
         method = payload.kind === 'photo' ? 'sendPhoto' : 'sendDocument';
         data = { chat_id: id, [payload.kind]: payload.fileId, caption: payload.caption };
       } else if (!text || text.length > 4096) throw new RelayError('Telegram 文字含前綴後不可超過 4,096 字元');
+      if (threadId !== undefined) data.message_thread_id = threadId;
       if (replyTo !== undefined) {
         if (!destinationReply('telegram', String(id), replyTo)) throw new RelayError('Telegram 回覆對照不符目的聊天室，請停止並核對紀錄');
         data.reply_parameters = { message_id: Number(replyTo.split(':')[1]), allow_sending_without_reply: true };
       }
       const result = await call(method, data);
       const confirmed = Number.isSafeInteger(result?.message_id) && result.message_id > 0
-        && Number.isSafeInteger(result.chat?.id) && String(result.chat.id) === String(id);
+        && Number.isSafeInteger(result.chat?.id) && String(result.chat.id) === String(id)
+        && (threadId === undefined || result.message_thread_id === threadId);
       return { id: confirmed ? `${result.chat.id}:${result.message_id}` : '' };
     },
   };

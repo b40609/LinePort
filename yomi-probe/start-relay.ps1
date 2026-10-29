@@ -41,6 +41,7 @@ $previousDestination = $env:LINECALL_DESTINATION
 try {
     $env:LINECALL_SOURCE = $requestedSource
     $env:LINECALL_DESTINATION = $requestedDestination
+    $env:UV_THREADPOOL_SIZE = '16'
     Start-Process -FilePath $relayNode -ArgumentList ('"' + $relayScript + '"') -WorkingDirectory $PSScriptRoot -WindowStyle Hidden
 } finally {
     $env:LINECALL_SOURCE = $previousSource

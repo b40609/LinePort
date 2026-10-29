@@ -2,7 +2,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { appendRecord, loadJournal, establishBaseline } from './relay-core.mjs';
 import { unseenText } from './relay-rules.mjs';
-import { createSettingsStore, configRevision, endpointKey, matchingContent, textRejection } from './route-config.mjs';
+import { createSettingsStore, configRevision, endpointKey, chatKey, matchingContent, textRejection } from './route-config.mjs';
 import { lineDirectory, readLineSince } from './line-directory.mjs';
 import { requireRelayEncryption, inspectRelayRead, relayFailure, RelayError, destinationEncryptionFailure } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
@@ -13,6 +13,7 @@ import { inSchedule } from './rule-options.mjs';
 import { readJournalFile, storageHealth } from './storage-health.mjs';
 import { sourceReply, destinationReply } from './reply-links.mjs';
 import { sendLinePhoto } from './line-media.mjs';
+import { splitTextChunks } from './text-chunk.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -85,7 +86,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         continue;
       }
       status.stage = destination.platform === 'line' ? 'destination_e2ee' : 'destination_prepare';
-      if (!preparations.has(destinationKey)) preparations.set(destinationKey, withDeadline(to.prepare(destination.id), operationTimeoutMs));
+      if (!preparations.has(destinationKey)) preparations.set(destinationKey, withDeadline(to.prepare(destination.id, destination), operationTimeoutMs));
       const protection = await preparations.get(destinationKey);
       if (destination.platform === 'line' && ['e2ee', 'transport'].includes(protection)) status.lineProtection = protection;
       if (protection === 'transport' && rule.media) {
@@ -169,12 +170,11 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       try {
         for (const message of unseenText(batches.get(endpointKey(edge.source)), edge.seen, edge.startedAt, edge.rule.media)) {
           if (edge.pending.size >= queueLimit) break;
-          const id = String(message.id), text = matchingContent(edge.rule, message, endpointKey(edge.source));
+          const id = String(message.id), text = matchingContent(edge.rule, message, endpointKey(edge.source), edge.source);
           if (text === null) {
             await edge.record({ id, outcome: 'baseline' }); edge.seen.add(id); edge.status.skipped++; continue;
           }
-          if (edge.destination.platform === 'telegram' && typeof text === 'string' && text.length > 4096) throw new RelayError('含前綴的文字超過 Telegram 4,096 字元上限；此路線已暫停');
-          if (edge.destination.platform === 'discord' && (typeof text !== 'string' || text.length > 2000)) throw new RelayError('含前綴的文字超過 Discord 2,000 字元上限，已暫停此路線；請縮短內容或改選目的');
+          if (edge.destination.platform === 'discord' && typeof text !== 'string') throw new RelayError('Discord 目的只支援純文字發送；請關閉媒體或改選其他目的');
           const parent = edge.rule.replies ? sourceReply(message, edge.source.platform, edge.source.id) : null;
           const reply = parent ? { replyVersion: 1, replyTo: parent } : {};
           await edge.record(typeof text === 'string' ? { id, outcome: 'queued', text, ...reply } : { id, outcome: 'media_queued', payloadVersion: 1, payload: text, ...reply });
@@ -188,7 +188,8 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     }
     const destinations = new Map();
     for (const edge of edges.filter(edge => edge.status.phase === 'running')) {
-      const key = endpointKey(edge.destination);
+      // Telegram topics share the chat's delivery spacing while keeping separate route journals.
+      const key = chatKey(edge.destination);
       if (!destinations.has(key)) destinations.set(key, []);
       destinations.get(key).push(edge);
     }
@@ -224,9 +225,25 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             try {
               attempted = true;
               attemptedDestinations.add(destinationKey);
-              const controller = new AbortController();
-              result = await withDeadline(adapters[edge.destination.platform].send(edge.destination.id, text, { ...(prepared ? { prepared, signal: controller.signal } : {}), ...(replyTo ? { replyTo } : {}) }), operationTimeoutMs, () => controller.abort());
-              if (!result?.id) throw new Error('Missing acknowledgement');
+              const chunkLimit = edge.destination.platform === 'telegram' ? 4000 : edge.destination.platform === 'discord' ? 1900 : Infinity;
+              const chunks = typeof text === 'string' && text.length > chunkLimit ? splitTextChunks(text, chunkLimit) : [text];
+              let firstResult = null;
+              const allOutputIds = [];
+              for (let i = 0; i < chunks.length; i++) {
+                if (i > 0) await pause(300);
+                const currentText = chunks[i];
+                const currentReply = i === 0 ? replyTo : undefined;
+                const controller = new AbortController();
+                const sendResult = await withDeadline(adapters[edge.destination.platform].send(edge.destination.id, currentText, {
+                  ...(prepared ? { ...(i === 0 ? { prepared } : {}), signal: controller.signal } : {}),
+                  ...(currentReply ? { replyTo: currentReply } : {}),
+                  ...(edge.destination.threadId !== undefined ? { threadId: edge.destination.threadId } : {})
+                }), operationTimeoutMs, () => controller.abort());
+                if (!sendResult?.id) throw new Error('Missing acknowledgement');
+                if (!firstResult) firstResult = sendResult;
+                allOutputIds.push(sendResult.id, ...(sendResult.ids || []));
+              }
+              result = { id: firstResult.id, ids: allOutputIds };
             } catch (error) {
               if (edge.destination.platform === 'telegram' && error instanceof TelegramRateLimit || edge.destination.platform === 'discord' && error instanceof DiscordRateLimit) {
                 const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + error.retryAfterMs);
@@ -242,7 +259,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             }
             status.stage = 'journal';
             for (const outputId of new Set([result.id, ...(result.ids || [])])) {
-              const key = `${adapters[edge.destination.platform].identity}:${endpointKey(edge.destination)}:${outputId}`;
+              const key = `${adapters[edge.destination.platform].identity}:${chatKey(edge.destination)}:${outputId}`;
               await writeRecord(outputFile, { key }); outputs.add(key);
             }
             const acknowledged = destinationReply(edge.destination.platform, edge.destination.id, result.id);
@@ -340,7 +357,10 @@ export async function runMultiRelay(state, directory, { createLineService }) {
       let pollError = sourceIds.length ? 'Telegram 正在等待第一次讀取' : '', polls = 0, lastPoll = null;
       adapters.telegram = {
         identity: `telegram:${me.id}`,
-        async prepare(id) { await client.getChat(id); },
+        async prepare(id, destination) {
+          const chat = await client.getChat(id);
+          if (destination.threadId !== undefined && (chat.type !== 'supergroup' || !chat.is_forum)) throw new RelayError('Telegram 目的未開啟群組話題，請停止並重新選擇目的話題');
+        },
         async recent(id) {
           if ((await client.getChat(id)).has_protected_content) throw new RelayError('Telegram 來源禁止轉送');
           return inbox.messages(id);

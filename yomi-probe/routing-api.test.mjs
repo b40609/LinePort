@@ -11,10 +11,12 @@ async function setup(t) {
   const service = Object.assign(new EventEmitter(), { resumeSession: async () => true, getRecentMessages: async () => [],
     client: { getAllChatMids: async () => ({ memberChats: ['c1'] }), getChats: async () => [{ chatMid: 'c1', chatName: '同名' }],
       getAllContactIds: async () => ['u1'], getContacts: async () => [{ mid: 'u1', displayName: '同名' }] } });
-  const settingsStore = { load: async () => config, save: async value => { config = value; }, telegramToken: async () => token, saveTelegram: async value => { token = value; } };
+  let savedTopics = [];
+  const settingsStore = { load: async () => config, save: async value => { config = value; }, telegramToken: async () => token, saveTelegram: async value => { token = value; }, telegramTopics: async () => savedTopics, saveTelegramTopics: async value => { savedTopics = value; return value; } };
   const relayController = { status: async () => ({ phase }), startRules: async revision => { starts.push(revision); }, stop: async () => { phase = 'stopped'; } };
-  const telegramFactory = () => ({ getMe: async () => ({ id: 123, username: 'synthetic_bot' }), getWebhookInfo: async () => ({ url: '' }), getChatMember: async () => ({ status: 'administrator' }), getChat: async id => ({ id: Number(id), title: '測試 TG', type: 'supergroup' }),
-    getUpdates: async () => [{ update_id: 1, message: { chat: { id: -1, title: '測試 TG' }, text: 'SYNTHETIC_PRIVATE_MESSAGE' } }] });
+  const telegram = { getMe: async () => ({ id: 123, username: 'synthetic_bot' }), getWebhookInfo: async () => ({ url: '' }), getChatMember: async () => ({ status: 'administrator' }), getChat: async id => ({ id: Number(id), title: '測試 TG', type: 'supergroup' }),
+    getUpdates: async () => [{ update_id: 1, message: { chat: { id: -1, title: '測試 TG' }, text: 'SYNTHETIC_PRIVATE_MESSAGE' } }] };
+  const telegramFactory = () => telegram;
   const server = createProbeServer({ service, settingsStore, relayController, telegramFactory, token: 'synthetic-local-token' });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
@@ -25,7 +27,7 @@ async function setup(t) {
     });
     request.on('error', reject); request.end(data === undefined ? undefined : JSON.stringify(data));
   });
-  return { call, starts, service, setPhase: value => { phase = value; } };
+  return { call, starts, service, telegram, setPhase: value => { phase = value; } };
 }
 const endpoint = (id, platform = 'line') => ({ id, platform, name: '同名' });
 const config = (platform = 'line') => ({ version: 1, rules: [{ id: 'rule', name: '同名群組測試', enabled: true,
@@ -96,6 +98,34 @@ test('Telegram directory exposes only identifiers and names, never message conte
   assert.deepEqual(result.body.endpoints.map(row => row.id), ['-1']);
   assert.ok(!JSON.stringify(result).includes('SYNTHETIC_PRIVATE_MESSAGE'));
   assert.equal((await call('telegram/chat', { id: 'https://example.com' })).status, 400);
+});
+
+test('Telegram topic discovery is read-only and manual topics require a forum group and valid integer ID', async t => {
+  const { call, telegram } = await setup(t);
+  const chat = { id: -2, title: 'Forum', type: 'supergroup', is_forum: true };
+  const calls = [];
+  telegram.getUpdates = async (...args) => {
+    calls.push(args);
+    return [{ message: { chat, message_thread_id: 42, is_topic_message: true, text: 'SYNTHETIC_PRIVATE_TOPIC' } }];
+  };
+  const discovered = await call('telegram/chats', {});
+  assert.equal(discovered.status, 200);
+  assert.deepEqual(discovered.body.endpoints.map(row => row.threadId), [undefined, 42]);
+  assert.deepEqual(calls, [[undefined, 0]]);
+  assert.ok(!JSON.stringify(discovered).includes('SYNTHETIC_PRIVATE_TOPIC'));
+  for (const threadId of [0, '42', null, 2147483648]) assert.equal((await call('telegram/chat', { id: '-2', threadId })).status, 400);
+  assert.equal((await call('telegram/chat', { id: '-2', threadId: 42 })).status, 400);
+  telegram.getChat = async () => chat;
+  const manual = await call('telegram/chat', { id: '-2', threadId: 42, topicName: 'Alerts' });
+  assert.equal(manual.status, 200);
+  assert.equal(manual.body.threadId, 42);
+  assert.equal(manual.body.name, 'Forum / Alerts');
+  const rulesWithTopics = (await call('rules')).body;
+  assert.ok(rulesWithTopics.telegramTopics.some(t => t.id === '-2' && t.threadId === 42 && t.name === 'Forum / Alerts'));
+  const value = config('telegram'); value.rules[0].destinations = [manual.body];
+  const saved = await saveRules(call, value);
+  assert.equal(saved.status, 200);
+  assert.equal((await call('rules')).body.config.rules[0].destinations[0].threadId, 42);
 });
 
 test('LINE endpoints require login, and invalid rule graphs cannot be persisted', async t => {

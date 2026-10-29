@@ -18,11 +18,13 @@ import { normalizeConfig, configRevision, createSettingsStore } from './route-co
 import { createAutostartStore, applyAutostartShortcuts, seedFromInstallerTask } from './autostart.mjs';
 import { lineDirectory } from './line-directory.mjs';
 import { createTelegramClient, createTelegramInbox, telegramMessage } from './telegram.mjs';
+import { telegramThreadId, telegramChatEndpoint, telegramDestinations, createTopicEndpoint } from './telegram-topics.mjs';
 import { previewRules, settingsBackup, validateBackup, safeDiagnostics } from './user-tools.mjs';
 import { createDeliveryReviewStore } from './delivery-review.mjs';
 import { storageHealth, privateSnapshot } from './storage-health.mjs';
 import { recentSenders, lineSourceSenders } from './source-senders.mjs';
 import { createDiscordClient, discordId } from './discord.mjs';
+import { notifyWindows } from './windows-notify.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, relayController, settingsStore, reviewStore, dataDirectory, autostartStore, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, port = 18765, token = randomBytes(32).toString('hex') }) {
@@ -35,6 +37,7 @@ service.on('line:loginRequired', () => {
   state.connected = false; state.phase = 'login_required'; state.pin = '';
   state.error = 'LINE 登入已失效，請停止轉送後重新授權；若另一個裝置被登出，請停止共存實驗。';
   groups.clear();
+  notifyWindows('LinePort 警告', 'LINE 登入已失效，請重新掃碼授權');
 });
 let relayAction = '';
 async function requireStopped() {
@@ -76,7 +79,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/api/relay/status') return send(res, 200, { ...(relayController ? await relayController.status() : { phase: 'unavailable' }), action: relayAction });
     if (req.method === 'GET' && req.url === '/api/rules' && settingsStore) {
       const config = await settingsStore.load();
-      return send(res, 200, { config, revision: configRevision(config), telegramConfigured: Boolean(await settingsStore.telegramToken()), telegramProtected: Boolean(await settingsStore.telegramProtected?.()), discordConfigured: Boolean(await settingsStore.discordToken?.()), discordProtected: Boolean(await settingsStore.discordProtected?.()), autostart: autostartStore ? await autostartStore.load() : null });
+      const telegramTopics = settingsStore.telegramTopics ? await settingsStore.telegramTopics() : [];
+      return send(res, 200, { config, revision: configRevision(config), telegramConfigured: Boolean(await settingsStore.telegramToken()), telegramProtected: Boolean(await settingsStore.telegramProtected?.()), discordConfigured: Boolean(await settingsStore.discordToken?.()), discordProtected: Boolean(await settingsStore.discordProtected?.()), autostart: autostartStore ? await autostartStore.load() : null, telegramTopics });
     }
     if (req.method === 'GET' && req.url === '/api/autostart' && autostartStore) return send(res, 200, { autostart: await autostartStore.load() });
     if (req.method === 'GET' && req.url === '/api/settings/backup' && settingsStore) return send(res, 200, settingsBackup(await settingsStore.load()));
@@ -225,6 +229,13 @@ const server = http.createServer(async (req, res) => {
       await operation(async () => {
         if (input.revision !== configRevision(await settingsStore.load())) throw new HttpError(409, '規則已被其他視窗更新；請先保留編輯內容，重新整理後再修改');
         await settingsStore.save(config);
+        const ruleTopics = config.rules.flatMap(r => r.destinations).filter(d => d.platform === 'telegram' && d.threadId !== undefined);
+        if (ruleTopics.length && settingsStore.saveTelegramTopics) {
+          const existing = await settingsStore.telegramTopics();
+          const merged = new Map(existing.map(t => [`${t.id}:${t.threadId}`, t]));
+          for (const t of ruleTopics) merged.set(`${t.id}:${t.threadId}`, t);
+          await settingsStore.saveTelegramTopics([...merged.values()]);
+        }
       });
       return send(res, 200, { config, revision: configRevision(config) });
     }
@@ -257,10 +268,20 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/telegram/chat' && settingsStore) {
       await requireStopped();
       if (typeof input.id !== 'string' || !/^-?[1-9]\d{0,15}$/.test(input.id) || !Number.isSafeInteger(Number(input.id))) throw new HttpError(400, '請輸入數字聊天室 ID');
+      if (input.threadId !== undefined && !telegramThreadId(input.threadId)) throw new HttpError(400, '話題 ID 必須為 1–2147483647 的整數');
+      if (input.topicName !== undefined && (typeof input.topicName !== 'string' || input.topicName.length > 50)) throw new HttpError(400, '話題名稱限 50 字元以內');
       const result = await operation(async () => {
         const chat = await telegramFactory(await settingsStore.telegramToken()).getChat(input.id);
         if (chat.has_protected_content) throw new HttpError(400, '此 Telegram 聊天室禁止轉送');
-        return { platform: 'telegram', id: String(chat.id), name: String(chat.title || chat.first_name || chat.username || input.id).slice(0, 100), kind: chat.type === 'private' ? 'person' : 'group' };
+        if (input.threadId !== undefined && (chat.type !== 'supergroup' || !chat.is_forum)) throw new HttpError(400, '此聊天室未開啟群組話題，請確認群組 ID');
+        const endpoint = createTopicEndpoint(chat, input.threadId, input.topicName);
+        if (input.threadId !== undefined && settingsStore.saveTelegramTopics) {
+          const existing = await settingsStore.telegramTopics();
+          const merged = new Map(existing.map(t => [`${t.id}:${t.threadId}`, t]));
+          merged.set(`${endpoint.id}:${endpoint.threadId}`, endpoint);
+          await settingsStore.saveTelegramTopics([...merged.values()]);
+        }
+        return endpoint;
       });
       return send(res, 200, result);
     }
@@ -268,12 +289,15 @@ const server = http.createServer(async (req, res) => {
       await requireStopped();
       const result = await operation(async () => {
         const updates = await telegramFactory(await settingsStore.telegramToken()).getUpdates(undefined, 0);
-        const rows = new Map();
-        for (const update of updates) {
-          const chat = (update.message || update.channel_post)?.chat;
-          if (chat && Number.isSafeInteger(chat.id) && !chat.has_protected_content) rows.set(String(chat.id), { platform: 'telegram', id: String(chat.id), name: String(chat.title || chat.first_name || chat.username || chat.id).slice(0, 100), kind: chat.type === 'private' ? 'person' : 'group' });
+        const endpoints = telegramDestinations(updates);
+        const topicEndpoints = endpoints.filter(e => e.threadId !== undefined);
+        if (topicEndpoints.length && settingsStore.saveTelegramTopics) {
+          const existing = await settingsStore.telegramTopics();
+          const merged = new Map(existing.map(t => [`${t.id}:${t.threadId}`, t]));
+          for (const t of topicEndpoints) merged.set(`${t.id}:${t.threadId}`, t);
+          await settingsStore.saveTelegramTopics([...merged.values()]);
         }
-        return { endpoints: [...rows.values()] };
+        return { endpoints };
       });
       return send(res, 200, result);
     }

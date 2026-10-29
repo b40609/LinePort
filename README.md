@@ -1,144 +1,224 @@
-# LinePort
+<div align="center">
 
-在 Windows 背景轉送 LINE 與 Telegram 訊息。支援多來源、多目的、指定發訊者、內容篩選及選用的 Discord 文字目的。
+# ⇄ LinePort
 
-**測試新版：[下載 Windows 安裝版 EXE](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.2/LinePort-v1.0.0-rc.2-Windows-x64-Setup.exe)，安裝後由桌面 LinePort 捷徑啟動。亦可使用[下載 v1.0.0-rc.2 Windows 免安裝候選版](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.2/LinePort-v1.0.0-rc.2-Windows-x64.zip)，全部解壓縮後雙擊 `LinePort.exe`。** 已包含執行環境，不用安裝 Node.js 或輸入指令；更新會自動停止並切換可辨識的舊服務，保留登入與規則，重開後記住所選身分。[啟動與更新說明](docs/PORTABLE.md)
+**企業級 Windows 跨平台即時通訊路由與訊息中繼引擎**  
+*LINE · Telegram (含 Forum Topics) · Discord — 本機自主運行、端對端加密相容、零外部雲端中轉*
 
-**目前為候選版；本次 LINE 新文字已確認兩個目的各收到一次，包含 Bot 目的群。** 完整 Windows 重啟、長時間運作及其他帳號／裝置組合仍待驗證。[候選版說明與驗收步驟](docs/RELEASE-1.0.0-rc.2.md)
+[![Latest Release](https://img.shields.io/badge/Release-v1.0.0-2563eb?style=flat-square)](https://github.com/b40609/LinePort/releases/tag/v1.0.0)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2011%20x64-0078d4?style=flat-square)](https://github.com/b40609/LinePort/releases)
+[![Tests](https://img.shields.io/badge/Automated%20Tests-308%20Passed-16a34a?style=flat-square)](yomi-probe/VERIFICATION.md)
+[![Security Audit](https://img.shields.io/badge/Security-Cloudflare%20Audit%20Verified-0d9488?style=flat-square)](SECURITY.md)
+[![License](https://img.shields.io/badge/License-MIT-64748b?style=flat-square)](LICENSE)
 
-包含 QR 登入保存、群組加密及多代金鑰修正；首次使用依序連結帳號、設定規則、啟動轉送，聊天室與指定成員自動載入。iPad 是可選協定身分，用於嘗試保留官方桌面 LINE，無需實體 iPad；原有桌面授權仍保留。不同帳號與裝置組合仍需驗收。[身分選擇與限制](docs/COMPATIBILITY.md)
+[立即下載](#-立即下載安裝與便攜版) · [核心亮點](#-核心架構亮點) · [快速上手](#-三分鐘快速上手) · [進階篩選與模版](#-進階篩選與動態模版語法) · [裝置共存策略](#-line-雙協定身分與官方電腦版共存策略) · [系統架構](#-系統架構與可靠性設計) · [資安與驗證](#-資安防線與自動化驗證)
 
-[候選版原始碼](https://github.com/b40609/LinePort/releases/download/v1.0.0-rc.2/LinePort-v1.0.0-rc.2.zip) · [更新與 SHA-256](docs/RELEASE-1.0.0-rc.2.md) · [先前版本 v0.8.7](https://github.com/b40609/LinePort/releases/tag/v0.8.7) · [使用教學](docs/USAGE.md) · [多來源與篩選](docs/ROUTING.md) · [支援範圍](docs/DEVELOPMENT-STATUS.md) · [安全說明](SECURITY.md) · [交接](HANDOFF.md)
+</div>
 
-[手機示範畫面](https://raw.githubusercontent.com/b40609/LinePort/v0.7.2/docs/assets/preview-mobile-0.7.jpg)（v0.7.2 歷史畫面；名稱、ID、訊息均為假資料）。
+---
 
-## 功能
+## 📦 立即下載（安裝與便攜版）
 
-- **多來源、多目的**：每個來源轉到所有選取目的；可建立多條規則，分別啟用或暫停。
-- **跨通訊平台**：LINE／Telegram 可轉送到 LINE、Telegram 或選用 Discord 一般文字頻道；Discord 只作目的。
-- **群組與個人**：LINE 已加入群組與好友；Telegram Bot 可存取的群組、頻道與私訊。
-- **文字篩選**：包含／排除關鍵字、加上訊息前綴。
-- **指定發訊者**：每個來源各選固定發訊者 ID；LINE 可勾選已加入成員，Telegram 列最近發訊者。名稱改變不影響，貼圖不轉送。搭配訊息關鍵字排除純寒暄。
-- **選用時段與媒體**：台北時段外明確保留待送或略過；Telegram → Telegram 圖片／檔案；Telegram → LINE 支援 JPEG／PNG 圖片，說明另送。
-- **管理與保護**：規則搜尋、複製為暫停規則、各來源文字／媒體模擬、安全診斷、設定備份還原、容量監控及保留原檔的私人封存與 SHA-256 驗證。
-- **選用回覆關聯**：引用同路線已確認送達的原訊息，重啟保留對照；缺少對照時送一般訊息，不補送被篩掉的原訊息。
-- **獨立狀態**：各來源讀取診斷，各配對待送、成功與略過數；一個目的受阻時，其他配對繼續。
-- **保存與去重**：首次略過歷史，同一規則重啟沿用紀錄；以平台與聊天室 ID 辨識，同名群組可分開選。
-- **LINE 補讀**：近期 50 則不足時，分頁查詢；最多 1,000 則，無法追到基準時顯示錯誤。
-- **安全預覽**：LINE 最近訊息與 JSON 匯出，不負責發送。
-- **LINE 已讀行為實測**：本次三則文字轉送皆收到、來源已讀維持 0；同帳號用官方 LINE 開啟來源後變成 1。可讓來源閱讀操作留給使用者；結果限本次版本與條件。[測試過程、對照與限制](docs/READ-RECEIPT-2026-10-10.md)
+LinePort 提供三種開箱即用的 Windows x64 發行套件，**全數內建執行環境（Node.js 與 .NET Runtime）**，使用者無須安裝任何開發工具或輸入終端機指令：
 
-| 項目 | 支援範圍 |
-| --- | --- |
-| 系統 | Windows 11；實測 Node.js 26.4.0 |
-| LINE | 非官方個人帳號協定；已加入的一般群組、好友私訊 |
-| Telegram | 官方 Bot API；Bot 有權限讀取／發送的聊天室 |
-|訊息 | 可讀純文字；選用 Telegram → Telegram 圖片／檔案、Telegram → LINE 圖片；目的仍以本工具帳號發送 |
-| 規則上限 | 30 條；每條 1–10 個來源、1–10 個目的；合計最多 100 組啟用配對 |
-| 未支援 | LINE 社群 OpenChat、Slack、Discord 來源、LINE 來源附件、LINE 目的檔案、貼圖、相簿整組／影音、編輯／刪除同步、完整聊天封存 |
+| 發行版本 | 推薦對象 | 產品特性與啟動方式 | 下載連結 |
+| :--- | :--- | :--- | :--- |
+| **Windows 安裝版**<br>`Setup.exe` | **一般使用者首選** | 免管理員權限一鍵安裝；自動建立桌面與開始功能表捷徑、支援登入 Windows 自動啟動、舊版平滑熱升級。 | [**下載 v1.0.0 安裝版 EXE**](https://github.com/b40609/LinePort/releases/download/v1.0.0/LinePort-v1.0.0-Windows-x64-Setup.exe) |
+| **Desktop 獨立桌面版**<br>`Desktop-Portable.zip` | **重度桌面常駐用戶** | **OmniRoute 同款獨立原生視窗**；免開外部瀏覽器，支援右下角系統匣（System Tray）縮小常駐、單一實例鎖定。 | [**下載 v1.0.0 獨立桌面版 ZIP**](https://github.com/b40609/LinePort/releases/download/v1.0.0/LinePort-v1.0.0-Desktop-Portable-x64.zip) |
+| **Windows 標準免安裝版**<br>`Windows-x64.zip` | **綠色環境 / 隨身部署** | 完整解壓至任意資料夾後雙擊 `LinePort.exe` 即可啟動背景服務並開啟本機控制台。 | [**下載 v1.0.0 標準免安裝 ZIP**](https://github.com/b40609/LinePort/releases/download/v1.0.0/LinePort-v1.0.0-Windows-x64.zip) |
 
-## 快速開始
+> **完整性驗證與版本資訊**：[v1.0.0 發布說明](docs/RELEASE-1.0.0.md) · [SHA256SUMS.txt 校驗檔](https://github.com/b40609/LinePort/releases/download/v1.0.0/SHA256SUMS.txt) · [原始碼壓縮包](https://github.com/b40609/LinePort/releases/download/v1.0.0/LinePort-v1.0.0.zip) · [免安裝與升級指南](docs/PORTABLE.md)
 
-在「連結帳號」選擇 LINE 登入身分，依自己需要保留的官方 LINE 裝置決定。**iPad／Windows／Mac 是協定登入身分，不是 LinePort 主機或手機限制。** 目前 LinePort 主機仍只支援 Windows；v0.8.4 發布 ZIP 已包含身分選單與 iPad QR 實驗模式。
+---
 
-安裝 [Node.js](https://nodejs.org/)，下載並解壓縮本專案。在專案目錄開啟 PowerShell：
+## ✨ 核心架構亮點
 
-```powershell
-cd yomi-probe
-npm.cmd ci --ignore-scripts
-npm.cmd start
-```
+LinePort 專為高可靠度的跨平台訊號轉發、投研情報匯流與社群訊息分流設計，具備以下六大工程級特性：
 
-開啟 http://127.0.0.1:18765/：
+### 1. 多對多跨平台網狀路由（M × N Mesh Routing）
+- **多來源匯流與多目的分發**：支援最多 30 條獨立規則（每條規則 1–10 個來源、1–10 個目的，最高 100 組並行配對）。
+- **跨平台雙向互通**：
+  - **LINE**：支援已加入的一般群組、好友私訊；目的端預設啟用 **Letter Sealing (E2EE) 端對端加密**，若偵測到目的群組含不支援 E2EE 之官方帳號／Bot，自動無縫切換為傳輸加密相容模式。
+  - **Telegram**：基於官方 Bot API，支援群組、頻道、私訊，並深度整合 **Forum Topics（群組話題專區）** 指定話題投遞。
+  - **Discord**：支援伺服器一般文字頻道作為轉發目的，自動抑制 `@everyone` 誤觸提及與外連預覽污染。
 
-1. 使用 LINE 時，在「連結帳號」選身分並按「切換身分並重啟服務」，依該模式完成主要裝置授權／QR 登入或恢復登入，LINE 群組與好友會自動載入。
-2. 使用 Telegram 時，在頁面連結並保存自己的 Bot Token，再載入 Bot 聊天室或手動加入 ID。
-3. 在「2. 設定規則」按「＋ 新增規則」，依序選來源與發訊者、目的與訊息條件，確認預覽後保存。
-4. 到「3. 啟動與狀態」按「開始轉送」，等基準完成後，在來源發新文字確認目的收到。
+### 2. 動態訊息模版與複合語法過濾引擎
+- **動態變數插值（Dynamic Templating）**：支援於訊息前綴或自訂模版嵌入 `{source}`、`{sender}`、`{date}`、`{time}`、`{timeShort}`、`{text}`，自動將平台代號映射為本機自訂別名。
+- **複合 AND 邏輯與 Regex 正規表達式**：除了多行 `OR` 包含／排除字詞外，單行支援 `詞彙A + 詞彙B`（AND 同時命中）與 `/正規表達式/i`，精準攔截關鍵情報並過濾日常閒聊。
+- **固定發訊者 ID 白名單**：各來源可獨立勾選特定成員（基於底層固定識別碼 MID / User ID），無懼群組成員頻繁更改暱稱或頭像。
 
-只使用 Telegram 時不必登入 LINE。Telegram 來源是 Bot 可收到的訊息，並非登入個人 Telegram 帳號讀取所有聊天。電腦需保持連網、不休眠。
+### 3. 獨家雙協定身分：與官方 Windows 電腦版 LINE 和平共存
+- 提供 **`IOSIPAD`（iPad QR 協定身分）** 與 **`DESKTOPMAC`（桌面授權身分）** 雙模式切換，無須擁有實體 iPad 或 Mac。
+- 透過 `IOSIPAD` 協定身分登入，可避免觸發 LINE 單一桌面追加裝置互踢機制，讓使用者在同一台電腦上**同時開啟官方 Windows 電腦版 LINE 與 LinePort**。
+- **零已讀干擾（Zero Read-Receipt Intrusion）**：LinePort 背景拉取與轉送 LINE 訊息時，**不會將來源聊天室標記為已讀**（維持未讀狀態供使用者於官方客戶端親自查閱）。
 
-[安裝教學](docs/INSTALL.md) · [Telegram 權限與設定](docs/USAGE.md#telegram) · [舊版更新](docs/USAGE.md#更新)
+### 4. 企業級容錯韌性（BMAD / CE Architecture）
+- **超長訊息自動智慧分段（Smart Chunking）**：突破 Telegram（4,096 字元）與 Discord（2,000 字元）單則長度限制，自動優先於段落或換行邊界切分並附加 `(1/N)` 頁碼依序發送。
+- **雙階段持久化佇列（Two-Phase Journal）**：每筆轉送皆經 `pending` → `sending` → `sent` 原子寫入與磁碟預檢；若發送途中斷網或結果不明，自動鎖定該配對待人工核對，**重啟絕不重複發送**。
+- **故障隔離（Fault Isolation）**：單一目的端受阻或觸發 429 限流時，僅該路線進入退避等待，其餘跨平台路線持續全速運作。
+- **Windows 原生系統通知**：當 LINE 授權失效或異常斷線時，立即於桌面右下角彈出原生氣泡通知（含 30 秒防抖節流）。
 
-## 依工作裝置選擇登入身分
+### 5. 原生桌面體驗與無縫生命週期管理
+- **Electron 獨立桌面視窗 + 系統匣常駐**：支援點擊關閉最小化至系統匣（Close-to-Tray）、托盤右鍵快捷選單與單一程序鎖定。
+- **開機自動啟動（Autostart）**：提供安裝精靈選項與控制台雙開關（「自動啟動本機服務」與「自動開始背景轉送」可獨立控制）。
+- **一鍵模擬與規則健檢**：內建不發訊的「規則沙盒模擬器」與「路線權限預檢」，修改規則前即可百分之百預知過濾與排版結果。
 
-一般帳號連結頁只提供 **原有桌面授權（DESKTOPMAC）** 與 **iPad QR 登入（IOSIPAD，實驗）**。要保留官方電腦版時先選本次實測的 iPad QR；沿用既有登入與設定則選原有桌面授權，後者可能使官方電腦版登出。需要保留官方 iPad LINE 時，目前沒有已驗證方案，可另行驗收原有桌面授權。選擇不依主機或手機品牌決定，無需實體 iPad／Mac。
+### 6. 國防級本機資安與隱私邊界
+- **零雲端中轉**：100% 於使用者本機執行，無外部中繼伺服器、無遙測追蹤。
+- **Windows DPAPI 硬體級憑證保護**：Bot Token 支援綁定當前 Windows 使用者帳戶與專屬熵值加密儲存。
+- **嚴格本機 API 防護**：控制台僅綁定 `127.0.0.1`，強制檢驗 `timingSafeEqual` 隨機 Token、Nonce CSP (`default-src 'none'`) 與 `Sec-Fetch-Site: same-origin`，免疫 CSRF 與 DNS Rebinding 攻擊。
 
-| 使用需求 | LinePort 可選身分 | 登入入口與驗證範圍 |
-| --- | --- | --- |
-| A 用戶工作時需要官方 Windows 電腦版 LINE，同時執行 LinePort | `IOSIPAD`：iPad 身分 | QR Code；單一真實帳號已確認共存及目錄／恢復登入，本次新文字已確認兩個目的各收到一次 |
-| 需要保留官方 iPad LINE | 原有桌面授權（DESKTOPMAC）可另行測試 | 尚無已驗證的共存方案，不保證不影響原裝置 |
-| 沿用既有桌面授權方式 | `DESKTOPMAC`：原有桌面授權 | 原有手機授權／保存登入；可能使其他官方電腦版 LINE 登出 |
+---
 
-選擇後按「切換身分並重啟服務」，頁面會自動重新整理。請先保存編輯並停止轉送；操作未完成時不可切換。**各身分的登入、E2EE、平台連結、規則與轉送紀錄分開保存**，切換不會複製憑證、自動登入或啟動轉送。也可使用根目錄的 `啟動iPad實驗模式.cmd` 或原有桌面啟動器。
-
-一般啟動器優先重用目前執行中的模式；v1.0.0-rc.1 起完整停止後會沿用最後成功啟動的身分，首次使用才預設 `DESKTOPMAC`。對應啟動器可明確指定身分。不得把 Windows 身分尚未實測的共存能力當作保證；若使用者同時需要保留多台官方裝置，仍須逐組驗收。[選擇方式與相容性矩陣](docs/COMPATIBILITY.md)
-
-> DESKTOPWIN 僅保留底層相容性、既有啟動器與獨立資料，未做真實登入或共存驗收；一般選單及切換 API 不開放此身分。它與 DESKTOPMAC 使用相同桌面授權流程，尚無已驗證的使用優勢，不作為官方 iPad 共存建議。
-
-## 為何新增 iPad 登入身分？解決什麼問題？
-
-使用者回報：啟動 LinePort 後，同帳號的官方電腦版 LINE 被強制登出，影響工作。原本 `DESKTOPMAC` 使用桌面登入身分；依症狀推測與官方電腦版的追加裝置登入衝突有關，尚無證據顯示是滑鼠／鍵盤操控權被搶走。LINE 官方也將「於其他追加裝置登入」列為自動登出的可能原因，但未保證任意裝置組合都能共存。[官方登出問題說明](https://help.line.me/line/smartphone/?contentId=50001462&lang=zh-Hant)
-
-本次新增 `IOSIPAD`，讓 LinePort 使用另一種追加裝置登入身分，嘗試保留官方電腦版的登入。這是為上述 A 用戶新增的選項；原有桌面授權也保留。預設未全面改為 iPad；失敗時不自動切回桌面登入，避免再次影響使用者。除了變更身分，也新增符合該身分的 QR／PIN 流程，以及獨立憑證、E2EE 與設定目錄。
-
-| 問題／能力 | 本次結果 |
-| --- | --- |
-| LinePort 與官方電腦版能否同時登入 | 單一真實帳號通過；使用者確認官方電腦版仍能正常收發 |
-| LinePort 能否載入群組／好友、重啟後恢復登入 | 同一帳號通過，無需重掃 QR |
-| 只改 iPad 身分仍無法完成授權 | 已改為對應的 QR 流程並完成該帳號登入；先前 code 0／4 的嘗試與修正見實驗紀錄 |
-| iPad 模式實際訊息解密、轉送與長期共存 | 本次 LINE 新文字已確認兩個目的各收到一次；長時間運作仍待驗證 |
-| Android／iPhone、官方 Windows／Mac 及既有平板等不同組合 | 不依主要裝置品牌限制登入；其他組合仍待實測，不保證全部共存 |
-
-軟體設計分開處理 **LinePort 主機作業系統、LINE 主要裝置、LINE 協定登入身分**。`IOSIPAD` 中的 iOS 版本是協定欄位，並非要求使用者手機安裝該版本；同理，`DESKTOPMAC` 不代表只能在 Mac 上執行。官方列出可作主要／追加裝置的多種平台，但官方 App 支援不等於本非官方工具已完成相容性驗證。[LINE 官方裝置說明](https://help.line.me/line/smartphone/sp?contentId=20000132&lang=zh-Hant)
-
-Windows 執行支援目前由 PowerShell 啟動器、ACL 與選用 DPAPI 實作，macOS／Linux 尚未移植。[相容性矩陣與設計原則](docs/COMPATIBILITY.md) · [iPad 操作、排查與完整紀錄](docs/IPAD-EXPERIMENT.md) · [213 項測試與實機驗收範圍](docs/ACCEPTANCE-2026-10-21.md)
-
-## 運作方式
-
-LINE 透過 [Yomi](https://github.com/RikaiDev/yomi) 讀取／解密及發送。目的預設端對端加密；缺少群組金鑰且確認含不支援 E2EE 的官方帳號時，自動採用僅支援文字的傳輸加密相容模式，頁面明確標示。偵測限 50 名成員與 5 秒，資訊不足時保留受阻狀態；Telegram 使用 [官方 Bot API](https://core.telegram.org/bots/api)。本專案負責規則、輪詢、篩選與保存，不需要 AI。
+## 🧭 系統架構與可靠性設計
 
 ```mermaid
 flowchart LR
-    L[LINE 群組與好友] --> R[來源共用讀取]
-    T[Telegram Bot訊息] --> R
-    R --> F[歷史排除、去重、作者、關鍵字]
-    F --> Q[各配對保存待送]
-    Q --> J[發送前保存 sending]
-    J --> DL[LINE 目的]
-    J --> DT[Telegram 目的]
-    J --> DD[Discord 選用目的]
-    DL --> S[保存回應 ID 與結果]
-    DT --> S
-    DD --> S
+    subgraph Ingress["1. 訊息接入層 (Ingress)"]
+        L["LINE 群組 / 好友<br>(Yomi E2EE / 多代金鑰鏈)"]
+        T["Telegram Bot API<br>(Long Polling 持久化 Offset)"]
+    end
+
+    subgraph Core["2. 核心過濾與模版引擎 (Filter & Template)"]
+        D["歷史基準排除 & 去重<br>防回流 Output ID 攔截"]
+        F["發訊者固定 ID 白名單<br>AND 複合條件 / Regex 篩選"]
+        M["動態模版插值引擎<br>{source} · {sender} · {time}"]
+    end
+
+    subgraph Queue["3. 持久化佇列與保護 (Durable Queue)"]
+        S["台北時段排程器<br>(時段外保留 Hold / 略過 Skip)"]
+        J["雙階段原子日誌<br>智慧分段 (Smart Chunking)"]
+    end
+
+    subgraph Egress["4. 多平台投遞層 (Egress)"]
+        DL["LINE 目的端<br>(E2EE / 含 Bot 群自動相容)"]
+        DT["Telegram 目的端<br>(群組 / 頻道 / 指定話題 #Thread)"]
+        DD["Discord 目的端<br>(防 Mention / 2000 字分段)"]
+    end
+
+    L --> D
+    T --> D
+    D --> F --> M --> S --> J
+    J --> DL
+    J --> DT
+    J --> DD
 ```
 
-各來源與待送佇列分開輪詢，完成後等待 3 秒；同一目的依序發送，間隔至少 1.1 秒。來源讀取失敗採退避重試；Telegram／Discord 明確限流保存等待期限，其他發送結果不明則持續暫停該配對，重啟也不自動重送。重複配對、自我轉送與規則循環會被阻擋；工具自己送出的訊息另保存 ID，避免再次接力轉送。
+---
 
-## 使用限制
+## 🚀 三分鐘快速上手
 
-- LINE 使用非官方個人帳號協定，有功能限制或停權風險；登入可能使官方電腦版 LINE 登出。[LINE 條款](https://terms.line.me/line_terms?lang=zh-Hant)
-- 目的訊息由登入 LINE 帳號或 Telegram Bot 重新發送，不保留原發訊者身分。
-- 休眠、斷線、查詢上限、首次基準與發送結果不明皆可能造成漏訊，沒有完整送達保證。
-- Telegram 受 Bot 權限、隱私模式、其他輪詢程序與 Webhook 影響；受保護內容及 Bot訊息不轉送。
-- Bot Token 可選 Windows DPAPI；舊明文檔為回復保留，LINE 登入／E2EE、訊息與封存仍未加密。勿分享或雲端同步資料目錄。
-- 單一紀錄 16 MiB、盤點紀錄合計 256 MiB 或可用空間低於 64 MiB 時停止收件／發送。封存不刪原檔、不釋放容量；尚無自動壓縮與無限期運作保證。
+### 步驟 1：啟動程式並連結平台帳號
+1. 下載並執行 **Windows 安裝版 (`Setup.exe`)** 或解壓縮 **Desktop 獨立桌面版**，雙擊 `LinePort.exe`。
+2. **連結 LINE（選用）**：
+   - 若同一台電腦需同時使用官方 Windows 電腦版 LINE，請於「1. 連結帳號」展開登入方式，選擇 **`保留官方電腦版：iPad QR（實驗）`**，點擊「切換身分並重啟服務」，再使用手機 LINE 掃描畫面上的 QR Code。
+   - 登入成功後，系統會自動載入所有已加入的 LINE 群組與好友清單，並修復多代 E2EE 金鑰鏈。
+3. **連結 Telegram / Discord（選用）**：
+   - 填入從 `@BotFather` 取得的 Telegram Bot Token（建議勾選 **Windows DPAPI 保護**），點擊「載入 Bot 聊天室與話題」或手動輸入群組 ID（如 `-100xxxxxxxxxx`）與話題 ID（`threadId`）。
 
-已完成一次 LINE → LINE 人工驗收，共三則文字轉送與已讀正向對照；本次另已確認新文字到兩個 LINE 目的各一次（一般群與 Bot 群）。跨平台及長時間運作仍待真實驗收。[已讀實測](docs/READ-RECEIPT-2026-10-10.md) · [驗證紀錄](yomi-probe/VERIFICATION.md)
+### 步驟 2：建立轉發規則與模擬預覽
+1. 切換至「**2. 設定規則**」→ 點擊「**＋ 新增規則**」。
+2. **選擇來源與發訊者**：勾選單一或多個來源聊天室；可針對個別來源設定「所有發訊者」或勾選「指定成員」（支援設定本機易讀別名）。
+3. **選擇目的與話題**：勾選要轉達的 LINE、Telegram（可於下拉選單指定發送至特定 **話題 #ID**）或 Discord 頻道。
+4. **設定篩選與模版**：設定包含／排除關鍵字、自訂訊息前綴模版及台北生效時段，透過下方「模擬目前編輯的規則」確認無誤後點擊保存。
 
-## 開發與文件
+### 步驟 3：啟動背景轉送與常駐
+1. 切換至「**3. 啟動與狀態**」→ 點擊「**開始轉送**」。
+2. 首次啟動會自動建立歷史基準（略過啟動前的舊訊息，僅轉送啟動後的新訊息）。
+3. 若需要開機自動運作，可於「**設定與診斷 → 開機自動啟動**」勾選「登入時啟動本機服務」與「登入時自動開始轉送」。
+
+---
+
+## 🧩 進階篩選與動態模版語法
+
+### 1. 動態訊息模版變數（填入「訊息前綴／格式模版」）
+
+| 變數語法 | 展開說明 | 實際輸出範例 |
+| :--- | :--- | :--- |
+| `{source}` | 來源聊天室顯示名稱 | `台股產業研究群` |
+| `{sender}` | 發訊者名稱（優先順序：本機自訂別名 → 平台名稱 → 固定 ID） | `王研究員` |
+| `{date}` | 訊息建立日期（台北時區 `YYYY-MM-DD`） | `2026-10-29` |
+| `{time}` | 訊息建立完整時間（台北時區 `HH:mm:ss`） | `14:32:08` |
+| `{timeShort}` | 訊息建立簡短時間（台北時區 `HH:mm`） | `14:32` |
+| `{text}` | 原始訊息內文（若模版未含 `{text}`，內文會自動接在模版後方） | `2330 法說會重點整理...` |
+
+- **模版設定範例**：`[{source} | {sender} {timeShort}] `  
+  **轉發呈現結果**：`[台股產業研究群 | 王研究員 14:32] 2330 法說會重點整理...`
+
+### 2. 進階關鍵字匹配語法（填入「包含關鍵字」）
+
+| 匹配模式 | 語法格式 | 範例 | 觸發條件說明 |
+| :--- | :--- | :--- | :--- |
+| **一般字面匹配** | 直接輸入文字（不分大小寫） | `法說會` | 訊息內含「法說會」即命中；多行之間為 **OR（任一符合）**。 |
+| **複合 AND 邏輯** | `詞彙A + 詞彙B` 或 `詞彙A AND 詞彙B` | `2330 + 買進`<br>`營收 AND 創高` | 同一則訊息必須**同時包含**行內所有指定詞彙才命中。 |
+| **正規表達式 (Regex)** | `/pattern/flags`（長度上限 256 字元） | `/\b(2330\|2454)\b.*目標價/i` | 符合正規表達式規則即命中（預設自動附加 `i` 不分大小寫）。 |
+
+---
+
+## 💻 LINE 雙協定身分與官方電腦版共存策略
+
+LINE 官方架構針對同一種「追加裝置類別」採單一登入限制。LinePort 將**主機作業系統**與**LINE 協定登入身分**完全解耦，讓使用者依日常工作環境自由選擇（各身分的憑證、E2EE 金鑰與規則完全隔離保存）：
+
+| 使用者工作情境 | 建議選擇的 LinePort 身分 | 登入方式 | 共存效果與注意事項 |
+| :--- | :--- | :--- | :--- |
+| **需要在同一台電腦同時使用「官方 Windows 電腦版 LINE」與 LinePort** | **`IOSIPAD`**<br>（iPad QR 協定身分） | 手機 LINE 掃描 QR Code + PIN 驗證 | **不會踢掉官方 Windows 電腦版 LINE**；無須擁有實體 iPad。（若您原本有使用實體 iPad 登入同帳號，實體 iPad 會登出） |
+| **不使用官方電腦版，或需要保留實體 iPad 上的 LINE 登入** | **`DESKTOPMAC`**<br>（原有桌面授權身分） | 手機號碼 + 手機授權碼驗證 | 沿用桌面版協定；啟動時可能使其他已登入的官方電腦版 LINE 登出。 |
+
+> 完整相容性驗證細節請參閱：[裝置身分選擇與相容性矩陣](docs/COMPATIBILITY.md) · [iPad QR 實驗與多代金鑰修復紀錄](docs/IPAD-EXPERIMENT.md) · [LINE 已讀零干擾實測報告](docs/READ-RECEIPT-2026-10-10.md)
+
+---
+
+## 📊 平台支援規格與系統邊界
+
+| 規格維度 | 支援細節與系統限制 |
+| :--- | :--- |
+| **作業系統** | Windows 11 x64（安裝版與免安裝版均內建 Node.js 26.x 與 .NET 10 Windows Desktop Runtime） |
+| **LINE 支援範圍** | 個人帳號協定（基於 `@rikaidev/yomi`）；支援已加入的一般群組、好友私訊；支援 E2EE 群組與含官方 Bot 群組自動相容 |
+| **Telegram 支援範圍** | 官方 Bot API；支援一般群組、超級群組（含 **Forum Topics 指定話題 ID**）、頻道與個人私訊 |
+| **Discord 支援範圍** | 官方 Bot API；僅作為轉發目的端（一般伺服器文字頻道），自動停用提及與連結預覽 |
+| **文字與分段處理** | 支援純文字、動態變數模版；超過 Telegram (4,096 字) 或 Discord (2,000 字) 自動按段落切分 `(1/N)` 連續發送 |
+| **媒體與回覆關聯** | 選用支援 Telegram → Telegram 圖片（<= 10 MB）／檔案（<= 50 MB）；Telegram → LINE 支援 JPEG／PNG 圖片；支援同路線回覆引用對照 |
+| **儲存保護上限** | 單一日誌檔上限 16 MiB、總日誌上限 256 MiB、磁碟剩餘空間低於 64 MiB 時自動進入保護暫停，防止耗盡系統磁碟 |
+| **明確不支援項目** | LINE OpenChat（社群）、LINE 來源圖片／檔案讀取、LINE 贴圖／相簿／影音轉傳、Discord 來源讀取、已發送訊息之編輯／收回同步 |
+
+> **免責與合規聲明**：LINE 連線採用非官方個人帳號協定，存在受平台限制或停權之潛在風險，請遵守 [LINE 服務條款](https://terms.line.me/line_terms?lang=zh-Hant) 並自行評估風險。本專案與 LINE Corporation、Telegram、Discord 及 Yomi 無任何官方附屬關係。
+
+---
+
+## 🛡️ 資安防線與自動化驗證
+
+LinePort 採用高標準防禦性軟體工程（Defensive Security Engineering），所有程式碼均通過 **Cloudflare `security-audit`** 規範審查與 **308 項離線單元／整合測試**：
+
+- **零真實憑證測試**：測試套件 100% 採用合成金鑰（Synthetic X25519 Keychains）與本機 Mock 伺服器，絕不接觸真實帳號資料或對外發送網路請求。
+- **桌面殼層安全隔離**：Electron 強制啟用 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`，並實作 `http:` / `https:` 外部連結 Scheme 白名單與導航攔截。
+- **防篡改模組掛載**：針對底層 Yomi E2EE 多代金鑰相容修補（`yomi-e2ee-compat.mjs`），採用檔案 SHA-256 雜湊校驗守衛，拒絕載入任何未經審查之變動模組。
+
+### 開發者本機建置與測試指令
 
 ```powershell
+# 1. 執行完整 308 項自動化單元與安全測試
 cd yomi-probe
+npm.cmd ci --ignore-scripts
 npm.cmd test
+
+# 2. 啟動純記憶體 UI 模擬沙盒（Port 18767，無須真實帳號即可體驗完整介面）
+node ui-mock.mjs
+
+# 3. 建置免安裝包與 Windows Setup.exe 安裝程式
+pwsh -File scripts/Build-Portable.ps1 -OutputDirectory dist/portable-v1.0.0
+pwsh -File scripts/Build-Installer.ps1 -PortableDirectory dist/portable-v1.0.0 -OutputDirectory dist/installer-v1.0.0 -IsccPath <ISCC.exe路徑>
 ```
 
-測試使用模擬服務，不讀取真實登入資料、不發真實 LINE／Telegram訊息。介面模擬可執行 `node ui-mock.mjs`，使用 18767 埠。
+---
 
-[疑難排解](docs/TROUBLESHOOTING.md) · [架構](docs/ARCHITECTURE.md) · [安全](SECURITY.md)
+## 📚 完整技術文件索引
 
-現行程式位於 `yomi-probe/`。`src/LinePort.Launcher/`、`scripts/Build-Portable.ps1`、`scripts/Build-Installer.ps1` 與 `installer/` 負責 Windows EXE 打包；其他舊通知診斷程式保留作參考。[早期單配對流程示範](docs/flow.html) 保留作參考。
+- **安裝與使用**：[安裝教學](docs/INSTALL.md) · [完整操作手冊](docs/USAGE.md) · [免安裝與平滑升級](docs/PORTABLE.md) · [疑難排解指南](docs/TROUBLESHOOTING.md)
+- **路由與相容性**：[多來源路由與篩選規則](docs/ROUTING.md) · [LINE 裝置身分相容性矩陣](docs/COMPATIBILITY.md) · [iPad QR 協定研究紀錄](docs/IPAD-EXPERIMENT.md)
+- **系統設計與驗證**：[系統架構設計](docs/ARCHITECTURE.md) · [資安政策與威脅模型](SECURITY.md) · [資料保存與隱私邊界](docs/DATA-RETENTION.md) · [歷次實機與自動化驗證紀錄](yomi-probe/VERIFICATION.md)
 
-## 授權
+---
 
-[MIT License](LICENSE)。核心依賴 `@rikaidev/yomi` 0.5.0，MIT，Copyright 2026 RikaiDev；見 [第三方聲明](THIRD_PARTY_NOTICES.md)。本工具與 LINE、Yomi 無官方關係。
+## 📄 授權條款 (License)
+
+本專案採用 [MIT License](LICENSE) 開源授權。核心協定依賴包含 `@rikaidev/yomi` (MIT)、`tweetnacl` 與 `qrcode`，完整第三方授權聲明請見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

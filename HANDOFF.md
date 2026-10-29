@@ -1,4 +1,105 @@
-## 最新：登入自動啟動產品化與 v1.0.0-rc.3 發布（2026-10-22，台灣）
+## 最新：OmniRoute 架構之 Electron 獨立桌面客戶端落地並實跑（2026-10-29，台灣）
+
+使用者指定採用「方案 B（Electron 桌面包裝，與 OmniRoute 同款架構）」並直接執行，本輪已完成環境安裝、程式運行與獨立 `.exe` 產出：
+1. **依賴安裝與直接啟動**：
+   - 已完成 Electron 本體環境安裝與二進制提取。
+   - 桌面應用程式已直接於背景常駐啟動（PID 8636, 44044...），獨立原生視窗與右下角系統匣（Tray）圖示已直接載入桌面，無需打開外部瀏覽器。
+2. **獨立原生視窗與系統匣（System Tray）**：
+   - 建立 `electron/main.cjs`：提供單一實例鎖定（Single Instance Lock），雙擊不會重複開窗；支援左鍵點擊托盤 Toggle 視窗，右鍵支援顯示、重新整理與真正退出。
+   - 實作 Close-to-Tray：點擊視窗右上角 `X` 關閉時自動隱藏至右下角系統匣，訊息轉送服務持續於背景運作不中斷。
+3. **獨立 Portable .exe 交付產出**：
+   - 執行 `scripts/Export-Desktop-Exe.ps1`，成功匯出包含完整執行環境的獨立綠色免安裝版：
+     `C:\Users\user\Documents\ChatGPT\line_call\dist\LinePort-Desktop-Portable\LinePort.exe`
+   - 雙擊該 `LinePort.exe` 即可獨立開窗與常駐系統匣。
+4. **既有核心驗證**：
+   - `npm test` 全數 **308 項單元測試全數通過**，核心轉送模組完全保持隔離不受影響。
+
+## 歷史：動態訊息模版與進階關鍵字篩選（P1 功能）全面落地（2026-10-29，台灣）
+
+## 歷史：動態訊息模版與進階關鍵字篩選（P1 功能）全面落地（2026-10-29，台灣）
+
+使用者授權按優先級推進功能優化，本輪完成 P1 核心功能研發、自動化測試與熱更新部署：
+1. **動態訊息模版引擎（Message Templating）**：
+   - 新增 `text-template.mjs` 與專用測試 `text-template.test.mjs`、`text-feature.test.mjs`。
+   - `route-config.mjs` 與 `multi-relay.mjs` 支援在前綴或模版中動態插值：
+     - `{source}`：來源聊天室名稱（如「劣勢資本 再起🔥」）。
+     - `{sender}`：發訊者名稱，自動依序解析「本機自訂別名（senderAliases 如土88）」→「原始暱稱」→「固定 ID」。
+     - `{time}`：台北時間（`HH:mm:ss`）。
+     - `{date}`：日期（`YYYY-MM-DD`）。
+     - `{text}`：原始內文。
+   - 若前綴不含變數，完全維持原既有字串輸出，100% 向後相容。
+2. **AND 複合關鍵字與 Regex 正規表達式篩選**：
+   - 關鍵字白名單支援單行「AND 邏輯」語法：例如 `2330 + 買進` 或 `台積電 AND 加碼`，必須同時命中才觸發轉送。
+   - 支援正規表達式語法：以斜線包裹（如 `/買進\s+\d{4}/i`）自動採 Regex 匹配。
+   - 保留不同行之間的「OR 邏輯」，有效降低群組閒聊雜訊。
+3. **前端 UI 提示與規則模擬器升級**：
+   - `index.html` 更新「包含關鍵字」與「訊息前綴」的欄位說明與 placeholder，引導使用插值變數與複合條件。
+   - `user-tools.mjs` 的模擬預覽同步支援來源物件與變數即時展開。
+
+**驗證與部署**：
+- 全套單元測試 `npm test`：**308 項全部通過**（0 失敗、0 跳過、0 取消）。
+- 前置備份至 `%LOCALAPPDATA%/LinePort/backups/hotfix-features-20261029-174717/`。
+- 熱更新同步覆蓋 5 個檔案至安裝目錄 `%LOCALAPPDATA%/Programs/LinePort/versions/1.0.0-rc.3-20261029124805/yomi-probe/`。
+- 服務以常駐模式重啟於 `http://127.0.0.1:18765/`（task-656）。
+
+## 歷史：BMAD 與 CE 架構韌性與效能優化全面落地（2026-10-29，台灣）
+
+使用者授權按照順序套用 BMAD 與 CE 系統優化，本輪已全數落地並通過測試：
+1. **第一優先（安全防護 - 超長文字自動分段 Chunking）**：
+   - 新增 `text-chunk.mjs` 與專用測試 `text-chunk.test.mjs`。
+   - `multi-relay.mjs` 移除 > 4096 / > 2000 字元直接拋錯暫停路線的阻斷設計，改為入列時正常保存，發送時依平台限制自動智慧分段（Telegram 4,000 字元、Discord 1,900 字元，優先於段落/換行切分並標註 `(1/N)`）。
+   - 分段依序發送，第一段帶 `replyTo`，後續段落保留同群/同話題 `threadId`，所有片段產生的 output ID 完整登錄至 `lineport-output.jsonl`，防止回流。
+2. **第二優先（維運友善 - Windows 原生桌面通知）**：
+   - 新增 `windows-notify.mjs` 與專用測試 `windows-notify.test.mjs`。
+   - 封裝非阻塞式 PowerShell BalloonTip 通知，支援防抖節流（30 秒內不重複彈窗）。
+   - 在 `server.mjs` 的 `line:loginRequired` 斷線事件中接入，當 LINE session 被伺服器端頂退或失效時，立即主動跳出桌面右下角通知提醒使用者重新掃碼。
+3. **第三優先（長效穩定 - 磁碟 I/O 查詢快取與執行緒池調優）**：
+   - `storage-health.mjs`：`assertWritable` 中的 `statfs` 磁碟空間檢查引入 10 秒記憶體快取（安全水位 > 128 MiB 時生效），將 Windows NTFS 密集寫入時的昂貴檔案系統查詢調用降低 99%。
+   - 啟動腳本 `start.ps1` 與 `start-relay.ps1` 設置 `$env:UV_THREADPOOL_SIZE = "16"`，釋放多執行緒非同步 I/O 並行處理能力。
+
+**驗證與部署**：
+- 全套單元測試 `npm test`：**300 項全部通過**（0 失敗、0 跳過、0 取消）。
+- 前置備份至 `%LOCALAPPDATA%/LinePort/backups/hotfix-optimizations-20261029-170308/`。
+- 熱更新同步 7 個檔案至安裝目錄 `%LOCALAPPDATA%/Programs/LinePort/versions/1.0.0-rc.3-20261029124805/yomi-probe/`。
+- 服務以常駐模式重啟於 `http://127.0.0.1:18765/`（task-572）。
+
+## 歷史：Telegram 話題顯示修復與熱更新部署（2026-10-29，台灣）
+
+使用者回報 Telegram 群組話題無法正確顯示至前端。經診斷發現三大成因並已全數修復：
+1. **話題狀態遺漏**：`relay-controller.mjs` 端點正規化函式漏傳 `threadId`，導致 Overview 與狀態 API 無法取得話題 ID。已補上安全整數保護（`Number.isSafeInteger(threadId) && threadId > 0 && threadId <= 2147483647`）。
+2. **話題清單與持久化**：Telegram Bot API 無官方 `getForumTopics` 查詢端點，單靠 updates 容易漏失。新增 `telegram-topics.mjs` 與 `route-config.mjs` 的 `telegramTopics` / `saveTelegramTopics`，將使用者手動加入的話題 ID 與自訂話題名稱持久化存入 `%LOCALAPPDATA%/LinePort/lineport-telegram-topics.json`。
+3. **前端 UI 與選單強化**：`index.html` 新增「話題名稱（選填）」輸入欄，加入含話題端點時自動補入預設群組端點，確保「發送話題」下拉選單永遠可選「未指定話題（群組預設位置）」與格式化「話題名稱（話題 #ID）」。
+
+**測試與熱更新**：
+- 全套單元測試 `npm test`：294 項全部通過、0 失敗、0 跳過。
+- 前置備份至 `%LOCALAPPDATA%/LinePort/backups/hotfix-topics-20261029-162137`。
+- 熱更新同步 5 個修改檔案至安裝目錄 `%LOCALAPPDATA%/Programs/LinePort/versions/1.0.0-rc.3-20261029124805/yomi-probe/`。
+- 服務以常駐模式重新啟動於 `http://127.0.0.1:18765/`。規則目標群組 `-1003707906115`、話題 `53865`（LinePort轉發專區）已確認寫入並生效。
+- LINE 端目前為 `login_required`，需由使用者開啟前端掃碼授權完成最後驗收。
+
+## 歷史：Telegram 話題選擇已安裝並套用 53865，轉送已恢復（2026-10-29，台灣）
+
+使用者續授權更新安裝版、套用話題 ID `53865`，並要求前端可選話題。已打包本機 `1.0.0-rc.3` 版本並以靜默安裝更新，桌面捷徑指向 `%LOCALAPPDATA%/Programs/LinePort/versions/1.0.0-rc.3-20261029124805/LinePort.exe`。安裝套件自我驗證通過，套件內附 runtime 的明確 `*.test.mjs` 測試集 292 項通過；沒有發布新 Git tag 或 GitHub 資產。
+
+新版介面服務已運作於 18765。切換後讀到的 IOSIPAD 設定較舊，未能定位原服務設定檔來源；已從停機前 API 回應重建原規則，正規化後 SHA256 與原回應 revision `3b9b2d672a81a45df0629edf64cf26c048579fc9cc5daae7201a570187b6d7e5` 完全相符。透過設定還原 API 備份目前設定並套用原規則，唯一業務變更為 Telegram `-1003707906115` 目的加入 `threadId:53865`、設定格式升為 2；LINE 目的、來源、指定人員及關鍵字保留。Telegram getChat 確認同群組已啟用話題，但不能確認該話題 ID 存在。
+
+備份與部署紀錄位於 `%LOCALAPPDATA%/LinePort/backups/topics-20261029-53865`。`lineport-rules-before.json` 是磁碟上的較舊設定，`live-rules-observed-before.json` 才是重建並驗證雜湊的停機前原規則；`settings-before.json` 與還原 API 自動備份保存取代前設定。舊安裝版本完整保留。既有 autostart-service/relay.ps1 的 launcher 位置已更新至新 EXE，原腳本及 Startup 捷徑已備份，未刪除捷徑。
+
+Headless Chromium 對實際安裝版驗證規則摘要與「發送話題」選單均顯示並選中 `53865`，375px 無水平溢出、頁面錯誤 0；未保存測試編輯或發送訊息。更新後 LINE 一度回報 `login_required`；使用者回覆「已登入」後，核對 IOSIPAD connected=true、busy=false、規則版本 2 及話題目的正確，以 `/api/relay/start` `{useRules:true}` 恢復轉送。介面與實際轉送服務皆回報 running；LINE 與 Telegram 兩路線 running/waiting，待送、不明與錯誤均 0，原始服務狀態確認 Telegram destination.threadId=53865。Telegram 話題路線 forwarded=0，尚無新訊息送達話題的實機驗收；未自行發送測試訊息。LINE 路線 forwarded=1 是服務回報的累積值，不作本輪新收件證據。
+
+恢復後持續輪詢出現來源歷史提示：早於啟動基準的訊息已略過，因此整體 phase=degraded；兩條路線仍 running/waiting、待送／不明／錯誤皆 0、解密失敗 0，非發送失敗。電腦 UTC 與 clock 工具時間相差約 1 秒。沒有清除紀錄、修改時鐘或回補舊訊息；等待符合原規則的新訊息確認收件。
+
+## 歷史：Telegram 話題選擇整合原始碼（2026-10-29，台灣）
+
+使用者授權將「Telegram 話題選擇」整合進轉發規則，並提供候選話題 ID `53865`。已新增觀察到的話題清單、手動群組 ID＋話題 ID、規則目的「發送話題」選單，保存、編輯、重新載入、備份與還原均保留話題。文字、圖片、檔案及回覆都傳入 `message_thread_id`；缺少或不符話題的回應暫停路線，不降級改送群組預設位置。話題來源篩選尚未提供，來源仍為整個聊天室。
+
+各話題獨立保存待送、去重與回覆對照；同群共用發送間隔與防回流保護。含話題規則保存為設定格式第 2 版，舊版會拒絕載入，避免忽略話題誤送。新話題視為新路線並略過首次歷史基準。API 無完整話題清單入口，載入僅列 Bot 尚未確認更新中觀察到的話題；手動加入僅確認群組開啟話題，不驗證話題本身存在。
+
+完整 `npm.cmd test`：292 通過、0 失敗／跳過。Headless Chromium 以純模擬伺服器驗證 `53865` 手動加入、選取、保存、編輯與重新整理；375px 長話題名稱無水平溢出、無頁面錯誤。未讀取真實憑證或發送真實訊息，未確認 `53865` 對應使用者的 LinePort 話題。
+
+本輪未打包、發布、更新正式規則或重新啟動正式服務。桌面捷徑仍指向 `1.0.0-rc.2-20261029095752/LinePort.exe`，目前安裝版不含本次功能。原始碼 package version 保持 `1.0.0-rc.3`；變更尚未提交。操作見 docs/USAGE.md，驗證見 yomi-probe/VERIFICATION.md。
+
+## 歷史：登入自動啟動產品化與 v1.0.0-rc.3 發布（2026-10-22，台灣）
 
 使用者要求把「登入自動啟動（可選）」做成產品功能再開一輪實作：安裝精靈選項預設勾選且可取消、設定頁兩個獨立開關（啟動介面服務／自動開始轉送），預設啟用但不強制。實作提交 `3c85444e935c31819ad03fa0ba3e00dedb24ddc9`，tag `v1.0.0-rc.3`，master 已推送。
 

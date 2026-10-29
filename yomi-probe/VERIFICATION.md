@@ -1,3 +1,34 @@
+## 2026-10-29：v1.0.0 正式版（功能整合、桌面客戶端、Cloudflare 安全審查加固與打包發布）
+
+1. **自動化測試套件**：`npm test` 執行全部 37 個測試檔案，共 **308 項測試全數通過（308 pass, 0 fail, 0 skipped）**。涵蓋 Telegram 話題持久化與清單、超長文字智慧分段（`text-chunk.test.mjs`）、動態訊息模版與 AND / Regex 複合關鍵字（`text-template.test.mjs`, `text-feature.test.mjs`）、Windows 氣泡通知防抖與字元跳脫清理（`windows-notify.test.mjs`）。
+2. **Cloudflare Security-Audit 防禦性安全審查加固**：
+   - `electron/main.cjs`：`setWindowOpenHandler` 與 `will-navigate` 強制檢驗 URL Scheme 白名單（僅允許 `http:` 與 `https:`），阻斷非預期系統協定呼叫。
+   - `yomi-probe/windows-notify.mjs`：移除換行與 PowerShell 保留字元並限長 200 字元，消除子程序命令注入風險。
+   - `yomi-probe/text-chunk.mjs` & `text-template.mjs`：切片迴圈強制正數步進收斂，Regex 限制 Pattern 長度 <= 256 字元與取樣上限 20,000 字元，防範 ReDoS。
+3. **打包與資產交付**：產出 `LinePort-v1.0.0-Windows-x64-Setup.exe`、`LinePort-v1.0.0-Desktop-Portable-x64.zip`、`LinePort-v1.0.0-Windows-x64.zip`、`LinePort-v1.0.0.zip` 與 `SHA256SUMS.txt` 並上傳至 GitHub Release `v1.0.0`。
+
+## 2026-10-29：話題功能安裝、設定與實際前端驗證
+
+已建立 `dist/LinePort-v1.0.0-rc.3-topics-20261029` 及 `dist/release-v1.0.0-rc.3-topics-20261029/LinePort-v1.0.0-rc.3-Windows-x64-Setup.exe`，打包、自我驗證及靜默安裝成功；桌面捷徑指向安裝目錄 `1.0.0-rc.3-20261029124805`。套件內附 runtime 執行明確 `*.test.mjs` 測試檔：292 通過、0 失敗、0 跳過。曾誤用未指定檔案的 `node --test`，額外偵測到人工實機測試 `test-relay.mjs`，它因缺少 `--send-latest` 於載入登入資料及發送前安全退出；之後改用正式測試集通過，未發送測試訊息。
+
+停機前原服務規則以 API 回應重建，正規化 SHA256 與停機前 revision 完全相符。設定還原 API 先備份當前較舊設定，再還原原規則並加入 Telegram `threadId:53865`；保存後整份設定與預期正規化結果 deepEqual。getChat 確認目的群組為啟用話題的 supergroup，未發送訊息，也未驗證該 ID 存在。
+
+Headless Chromium 開啟實際安裝服務 18765，規則摘要與編輯器「發送話題」顯示 `53865`，選單值為 `telegram:-1003707906115:thread:53865`。1280px 與 375px 截圖已產生，375px 無水平溢出、頁面錯誤 0；只開啟編輯畫面，沒有保存測試修改。腳本 `lineport-installed-topic-ui.mjs` 及截圖置於 Windows Temp。
+
+使用者回覆「已登入」後，核對 `/api/status` connected=true、device=IOSIPAD、busy=false 及保存的話題 53865，以 `/api/relay/start` `{useRules:true}` 成功恢復轉送。介面 API 與 18766 實際服務均為 running，兩條路線 running/waiting、pending=0、uncertain=0、errors=0；原始狀態中的 Telegram destination.threadId=53865。Telegram forwarded=0，LINE 累積 forwarded=1，不宣稱本輪實際收件成功；未自行發送測試訊息。
+
+後續輪詢：來源提示「未處理訊息早於啟動基準，已略過」，整體變為 degraded；兩條路線仍 running/waiting，待送、不明、錯誤及來源解密失敗皆 0。來源持續輪詢，未改動跳過歷史的保護。電腦 UTC 與 clock 工具約差 1 秒，未變更時鐘或回補舊訊息。
+
+限制：切換後 IOSIPAD 的磁碟設定與停機前 API 不同，來源仍未定位；原規則已透過雜湊確認重建。尚未驗證新訊息送達指定話題或 Windows 重啟；沒有發布新版 GitHub 資產。交接與備份位置見 HANDOFF.md。
+
+## 2026-10-29：Telegram 話題目的整合（原始碼驗證）
+
+完整 `npm.cmd test`：292 通過、0 失敗、0 跳過。新增測試涵蓋話題設定與備份還原、格式與聊天室循環驗證、觀察話題清單且不暴露訊息內容、文字／圖片／檔案／回覆參數、話題回應確認、兩話題獨立紀錄與重啟去重、群組共用發送間隔、防回流、錯誤話題不回退、429 安全重試保留話題、HTTP 手動加入及規則編輯器。含話題規則正規化為設定版本 2，舊版拒絕載入；一般規則仍為版本 1。
+
+另以既有 `ui-mock.mjs`（18767，設定只存記憶體、不使用憑證、不連平台）及 Headless Chromium 驗證完整畫面。話題清單及手動驗證回應由瀏覽器攔截提供合成資料；使用者候選 ID `53865` 的表單請求確實帶入數字 threadId 與合成群組 ID。目的下拉切換、確認摘要、保存、編輯、重新整理均保留該 ID，來源清單排除話題。375px 視窗及長名稱無水平溢出，頁面錯誤為 0；桌面與手機截圖已檢視。測試腳本與截圖暫存於 Windows Temp，未加入產品。
+
+`git diff --check` 通過。未讀取真實金鑰、未發送 LINE／Telegram 訊息、未確認候選 ID 在真實群組存在。未修改正式設定、重啟正式服務、打包 EXE 或發布；桌面安裝版仍 rc.2。正式話題關閉／刪除／權限等伺服器錯誤只驗證 Mock，尚無實際收送驗收。
+
 ## 2026-10-22：v1.0.0-rc.3 登入自動啟動、打包與發布驗證
 
 使用者要求把登入自動啟動做成產品功能（安裝精靈選項＋頁面兩個開關），預設啟用、可取消、不強制。實作提交 `3c85444e935c31819ad03fa0ba3e00dedb24ddc9`，annotated tag `v1.0.0-rc.3`（tag 物件 `53027900768c4f7b3588e64dcac76d4572e4138b`），master 已推送 `f18f71e..3c85444`。
