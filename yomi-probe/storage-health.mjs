@@ -7,6 +7,20 @@ import { RelayError } from './relay-health.mjs';
 export const MAX_JOURNAL_BYTES = 16 * 1024 * 1024;
 export const MAX_DATA_BYTES = 256 * 1024 * 1024;
 export const MIN_FREE_BYTES = 64 * 1024 * 1024;
+const diskFreeCache = new Map();
+const STATFS_CACHE_TTL_MS = 10000;
+
+async function getCachedFreeBytes(dir) {
+  const cached = diskFreeCache.get(dir);
+  const now = Date.now();
+  if (cached && (now - cached.time < STATFS_CACHE_TTL_MS) && cached.freeBytes >= MIN_FREE_BYTES * 2) {
+    return cached.freeBytes;
+  }
+  const disk = await statfs(dir);
+  const freeBytes = disk.bavail * disk.bsize;
+  diskFreeCache.set(dir, { time: now, freeBytes });
+  return freeBytes;
+}
 const included = name => /^(?:lineport-(?:route-[a-f0-9]{64}|review-[a-f0-9]{64}|telegram-inbox-\d+|output)\.jsonl|lineport-rules\.json|relay-(?:[a-f0-9]{24}|source1-destination2)\.jsonl)$/.test(name);
 async function hashFile(file) {
   const hash = createHash('sha256');
@@ -56,8 +70,9 @@ export async function storageHealth(directory) {
     : bytes >= MAX_DATA_BYTES * .8 || largest >= MAX_JOURNAL_BYTES * .8 || freeBytes < MIN_FREE_BYTES * 4 ? '儲存容量接近上限，請安排停止與私人封存；封存不會清除原資料或增加可用空間' : '' };
 }
 export async function assertWritable(file) {
-  const disk = await statfs(path.dirname(file));
-  if (disk.bavail * disk.bsize < MIN_FREE_BYTES) throw new RelayError('可用磁碟空間不足 64 MiB，已停止寫入／發送，請釋放其他資料的空間並保留本程式紀錄');
+  const dir = path.dirname(file);
+  const freeBytes = await getCachedFreeBytes(dir);
+  if (freeBytes < MIN_FREE_BYTES) throw new RelayError('可用磁碟空間不足 64 MiB，已停止寫入／發送，請釋放其他資料的空間並保留本程式紀錄');
   try {
     const info = await lstat(file);
     if (!info.isFile() || info.isSymbolicLink() || info.size >= MAX_JOURNAL_BYTES) throw new RelayError('紀錄容量已達 16 MiB 或檔案異常，已停止；請私人封存並保留原檔');

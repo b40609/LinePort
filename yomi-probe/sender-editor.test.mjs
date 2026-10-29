@@ -54,6 +54,31 @@ test('route status distinguishes destination Bot compatibility from E2EE', async
   }
 });
 
+test('Telegram destination topic selector saves, edits and renders the chosen topic independently', async () => {
+  const ui = await editor();
+  ui.run("addEndpoints([{platform:'telegram',id:'-222',name:'Forum',kind:'group'},{platform:'telegram',id:'-222',name:'Forum / LinePort',threadId:42,kind:'group'},{platform:'telegram',id:'-222',name:'Forum / News',threadId:43,kind:'group'}]);for(const option of $('destination').options)option.selected=option.value==='telegram:-222';");
+  assert.equal(ui.nodes.get('source').options.filter(option => option.value.includes(':thread:')).length, 0);
+  for (const id of ['destinationSelection', 'destinationCount']) ui.nodes.set(id, { ...ui.nodes.get('recentSenders'), children: [] });
+  ui.run('renderDestinationSelection()');
+  const selector = ui.nodes.get('destinationSelection').children[0].children[1].children[0];
+  assert.equal(selector.options.length, 3);
+  assert.match(selector.options[1].textContent, /LinePort.*話題 #42/);
+  selector.value = 'telegram:-222:thread:42'; selector.onchange();
+  assert.equal(ui.run("selected('destination')[0].threadId"), 42);
+  await ui.nodes.get('saveRule').onclick();
+  assert.equal(ui.nodes.get('notice').textContent, '');
+  assert.equal(ui.saved().rules[0].destinations.length, 1);
+  assert.equal(ui.saved().rules[0].destinations[0].threadId, 42);
+  const row = ui.nodes.get('rules').children[0];
+  assert.match(row.children[1].textContent, /話題 #42/);
+  row.children[2].children[0].onclick();
+  assert.equal(ui.run("selected('destination')[0].threadId"), 42);
+  await ui.nodes.get('saveRule').onclick();
+  assert.equal(ui.saved().rules[0].destinations[0].threadId, 42);
+  ui.run("renderRouteStatuses({routes:[{name:'Rule',source:{name:'Source'},destination:{name:'Forum',threadId:42},phase:'running',forwarded:0,pending:0,uncertain:0,errors:0,skipped:0}]})");
+  assert.match(ui.nodes.get('routeStatuses').children[0].textContent, /話題 #42/);
+});
+
 test('sender editor saves visible alias without input event and restores alias before platform name', async () => {
   const ui = await editor();
   await ui.nodes.get('loadSenders').onclick();

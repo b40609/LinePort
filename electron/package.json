@@ -1,0 +1,14 @@
+{
+  "name": "lineport-desktop",
+  "productName": "LinePort",
+  "version": "1.0.0",
+  "description": "LinePort 訊息轉發與監控桌面客戶端",
+  "main": "main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.2.1"
+  }
+}

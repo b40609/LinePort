@@ -28,7 +28,7 @@ async function readDelivery(directory, identity) {
   let route = null;
   for (const line of journal.split('\n').filter(Boolean)) {
     const row = JSON.parse(line);
-    if (row.routeIdentity) route = { name: String(row.name || '').slice(0, 100), source: String(row.source?.name || '').slice(0, 100), destination: String(row.destination?.name || '').slice(0, 100) };
+    if (row.routeIdentity) route = { name: String(row.name || '').slice(0, 100), source: String(row.source?.name || '').slice(0, 100), destination: String(row.destination?.name || '').slice(0, 100) + (row.destination?.threadId !== undefined ? `（話題 #${row.destination.threadId}）` : '') };
     if (['sending', 'uncertain'].includes(row.outcome)) unresolved.add(row.id);
     if (['sent', 'retry'].includes(row.outcome)) unresolved.delete(row.id);
   }

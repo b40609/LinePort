@@ -57,6 +57,19 @@ Telegram／Discord 可選 Windows DPAPI；保存後 Token 輸入欄清空。舊�
 
 在來源群組發新文字，或向 Bot 按 Start，接著按「載入 Bot 聊天室」。它只從目前尚待處理的更新取得聊天室資料，不一定列出 Bot 加入過的所有聊天室。沒有出現時，可手動填入數字聊天室 ID，再按「加入選單」。不支援網址或 @username。
 
+要固定送到群組內的特定話題（例如「LinePort」）：
+
+1. 先停止轉送，確認目的群組已開啟話題，且 Bot 可在該話題發訊。
+2. 在 Telegram 的指定話題發一則 Bot 能收到的新文字，再到「連結帳號」按「載入 Bot 聊天室與話題」。清單只包含近期收到更新的話題，不是完整話題目錄；若沒有出現，可手動填入群組 ID 與數字「話題 ID」再加入。
+3. 編輯轉發規則，在目的選擇該群組，再用「發送話題」選取標有「話題 #ID」的目的；也可直接勾選清單中的話題。移除原本未指定話題的群組目的，避免同時轉送兩個位置。
+4. 核對確認頁與規則清單顯示指定話題，保存後再按「開始轉送」。
+
+文字、圖片、檔案與回覆都會帶上指定的 `message_thread_id`；每個話題的待送、去重與回覆對照獨立保存。話題不存在、已關閉、權限不足或回傳結果無法確認話題時，該路線暫停並保留紀錄，不會移除話題 ID 改送群組預設位置。手動加入只確認群組開啟話題，無法預先確認該話題 ID 是否存在。話題僅支援轉發目的；Telegram 來源仍讀取整個聊天室。未指定話題的舊規則保持原有行為。改到另一話題視為新的路線，首次啟動略過歷史訊息。
+
+含話題目的的規則會保存為設定格式第 2 版；舊版 LinePort 會拒絕載入，避免忽略話題後轉送到其他位置。移除所有話題目的並保存後，才會回到第 1 版格式。設定備份與還原會保留話題 ID。
+
+API 參數依據：[sendMessage](https://core.telegram.org/bots/api#sendmessage)、[sendPhoto](https://core.telegram.org/bots/api#sendphoto)、[sendDocument](https://core.telegram.org/bots/api#senddocument)。
+
 請勿讓同一 Bot 同時由其他程式執行 getUpdates。本版採長輪詢，Telegram 有 Webhook 時會阻止來源啟動，不會自行刪除 Webhook。建議專用 Bot，避免搶走其他服務的更新。
 
 LINE → Telegram、Telegram → LINE 與同平台轉送均可。Telegram Bot 收到哪些訊息，取決於權限與隱私模式；不會讀取你的全部個人聊天。本工具排除 Bot 發出的訊息及受保護內容。
