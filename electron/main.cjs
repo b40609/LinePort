@@ -70,6 +70,7 @@ async function ensureServerRunning() {
 
   const env = {
     ...process.env,
+    ELECTRON_RUN_AS_NODE: '1',
     LINEPORT_LINE_DEVICE: process.env.LINEPORT_LINE_DEVICE || 'IOSIPAD',
     UV_THREADPOOL_SIZE: '16',
   };
