@@ -21,4 +21,9 @@ New-Item -ItemType Directory -Path $appDir -Force | Out-Null
 Copy-Item -Path (Join-Path $root 'electron\main.cjs') -Destination $appDir -Force
 Copy-Item -Path (Join-Path $root 'electron\package.json') -Destination $appDir -Force
 
+# Bundle assets and yomi-probe into resources so the portable package is 100% self-contained
+$resDir = Join-Path $distDir 'resources'
+Copy-Item -Path (Join-Path $root 'package') -Destination (Join-Path $resDir 'package') -Recurse -Force
+Copy-Item -Path (Join-Path $root 'yomi-probe') -Destination (Join-Path $resDir 'yomi-probe') -Recurse -Force
+
 Write-Host "Portable desktop application ready at: $distDir\LinePort.exe" -ForegroundColor Green
