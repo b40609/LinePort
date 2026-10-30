@@ -39,17 +39,58 @@ test('writeAutostartScripts writes idempotent hidden entrypoints', { skip: windo
   assert.equal(first.serviceScript, second.serviceScript);
   for (const script of [first.serviceScript, first.relayScript]) {
     const content = await readFile(script, 'utf8');
-    assert.match(content, /LinePort\.exe/);
     assert.ok(!content.includes('node_modules'));
   }
+  assert.match(await readFile(first.serviceScript, 'utf8'), /LinePort\.exe/);
   const relay = await readFile(first.relayScript, 'utf8');
   assert.match(relay, /api\/relay\/status/);
+  assert.match(relay, /api\/status/);
+  assert.match(relay, /api\/resume/);
   assert.match(relay, /api\/relay\/start/);
   assert.match(relay, /useRules/);
   // The token travels from the served page inside the same hidden process; no secrets are written.
   assert.ok(!relay.includes('X-Probe-Token: '));
   const directory = await readdir(path.join(home, 'LinePort'));
   assert.deepEqual(directory.sort(), ['autostart-relay.ps1', 'autostart-service.ps1']);
+});
+
+test('relay autostart resumes the saved session before starting rules', { skip: windowsOnly.skip }, async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'lineport-autostart-behavior-'));
+  const { relayScript } = await writeAutostartScripts(home);
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const run = promisify(execFile);
+  const cases = [
+    ['idle', ['/api/relay/status', '/api/status', '/api/resume', '/api/relay/start']],
+    ['connected', ['/api/relay/status', '/api/status', '/api/relay/start']],
+    ['resume-fails', ['/api/relay/status', '/api/status', '/api/resume', '/api/relay/start']],
+    ['running', ['/api/relay/status']],
+  ];
+  for (const [scenario, expected] of cases) {
+    const command = `
+$scenario = '${scenario}'
+function Invoke-WebRequest {
+  param($Uri, [switch]$UseBasicParsing, $TimeoutSec)
+  return [pscustomobject]@{ Content = "const token='" + ('a' * 64) + "'" }
+}
+function Invoke-RestMethod {
+  param($Uri, $Method, $Headers, $ContentType, $Body, $TimeoutSec)
+  $endpoint = ([uri]$Uri).AbsolutePath
+  Write-Host "CALL:$endpoint"
+  switch ($endpoint) {
+    '/api/relay/status' { return [pscustomobject]@{ phase = $(if ($scenario -eq 'running') { 'running' } else { 'stopped' }) } }
+    '/api/status' { return [pscustomobject]@{ connected = ($scenario -eq 'connected'); busy = $false; phase = 'idle' } }
+    '/api/resume' { if ($scenario -eq 'resume-fails') { throw 'No saved LINE session' }; return @{} }
+    '/api/relay/start' { if ($Body -ne '{"useRules":true}') { throw 'Expected saved rules' }; return @{} }
+    default { throw "Unexpected endpoint: $endpoint" }
+  }
+}
+. '${relayScript.replaceAll("'", "''")}'
+`;
+    const { stdout } = await run(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], { windowsHide: true, timeout: 15000 });
+    const calls = stdout.split(/\r?\n/).filter(line => line.startsWith('CALL:')).map(line => line.slice(5));
+    assert.deepEqual(calls, expected, scenario);
+  }
 });
 
 test('applyAutostartShortcuts creates and removes only its own two shortcuts', { skip: windowsOnly.skip }, async t => {

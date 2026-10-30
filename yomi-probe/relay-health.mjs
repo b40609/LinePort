@@ -83,6 +83,6 @@ export function relayWarning(state) {
   if (state.phase === 'failed') return relayFailure(state.stage);
   if (state.lastRead?.decryptFailed > 0) return '來源有訊息無法解密，這些訊息尚未轉送；請停止轉送，再用手機重新授權並用新文字測試。';
   if (state.lastRead?.invalidTime > 0) return '來源有訊息缺少有效時間，已略過；請回報此狀態供排查。';
-  if (state.lastRead?.history > 0) return '來源有未處理訊息早於啟動基準，已略過；請核對電腦日期與時間，並在啟動後發一則新文字測試。';
+  if (state.lastRead?.history > 0) return '來源有早於此路線首次啟動的歷史訊息，已依規則略過。';
   return '';
 }
