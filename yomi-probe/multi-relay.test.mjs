@@ -128,6 +128,19 @@ test('route diagnostics distinguish old scans, new candidates and keyword reject
   assert.equal(restarted.state.routes[0].lastRead.eligible, 0);
 });
 
+test('unseen history is skipped without marking running routes as blocked', async () => {
+  const line = adapter({ messages: [message('old', 'old', 900), message('new', 'new')] });
+  const relay = await createMultiRelay({ config: config(rule()), adapters: { line }, directory: await fixture(), now: () => 1000 });
+  await relay.tick();
+  assert.equal(relay.state.phase, 'running');
+  assert.equal(relay.state.routes[0].lastRead.history, 1);
+  assert.match(relay.state.sources[0].warning, /歷史訊息/);
+  assert.deepEqual(line.calls.map(([, text]) => text), ['new']);
+  line.read = async () => { throw new Error('offline'); };
+  await relay.tick();
+  assert.equal(relay.state.phase, 'degraded');
+});
+
 test('configuration rejects overlapping edges, cycles, invalid endpoints and excessive fan-out', () => {
   assert.throws(() => config(rule(), rule('two')), /重複/);
   assert.throws(() => config(rule(), rule('reverse', [endpoint('cdestination')], [endpoint('csource')])), /循環/);

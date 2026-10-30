@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { access, mkdir, writeFile, rename, readFile, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { HttpError } from './local-http.mjs';
 
 // Autostart preference contains only on/off switches; no credentials are stored here.
@@ -77,8 +78,16 @@ export async function writeAutostartScripts(localAppData, options = {}) {
   if (!localAppData) throw new Error('LOCALAPPDATA is required');
   const directory = scriptDirectory(localAppData);
   await mkdir(directory, { recursive: true });
-  const header = `$ErrorActionPreference = 'Stop'\n$launcher = Join-Path (Split-Path -Parent $PSScriptRoot) 'LinePort.exe'\nif (!(Test-Path -LiteralPath $launcher)) { throw 'LinePort.exe not found; run the installer or portable launcher once first.' }\n`;
-  const service = `${header}Start-Process -FilePath $launcher -WorkingDirectory (Split-Path -Parent $launcher) -WindowStyle Hidden\n`;
+  const header = `$ErrorActionPreference = 'Stop'\n`;
+  const appRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const installedRoot = path.join(localAppData, 'Programs', 'LinePort', 'versions');
+  const relative = path.relative(installedRoot, appRoot);
+  const installed = relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+  const portableLauncher = path.join(appRoot, 'LinePort.exe').replaceAll("'", "''");
+  const selectLauncher = installed
+    ? `$root = Join-Path $env:LOCALAPPDATA 'Programs\\LinePort\\versions'\n$launcher = Get-ChildItem -LiteralPath $root -Directory -ErrorAction Stop | Sort-Object LastWriteTimeUtc -Descending | ForEach-Object { Join-Path $_.FullName 'LinePort.exe' } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1\n`
+    : `$launcher = '${portableLauncher}'\n`;
+  const service = `${header}${selectLauncher}if (!$launcher -or !(Test-Path -LiteralPath $launcher)) { throw 'LinePort.exe not found.' }\nStart-Process -FilePath $launcher -WorkingDirectory (Split-Path -Parent $launcher) -WindowStyle Hidden\n`;
   const relay = `${header}
 $base = 'http://127.0.0.1:18765'
 $token = ''
@@ -94,6 +103,12 @@ $headers = @{ 'X-Probe-Token' = $token }
 try {
     $state = Invoke-RestMethod -Uri ($base + '/api/relay/status') -Headers $headers -TimeoutSec 5
     if ($state.phase -in @('running', 'degraded', 'starting')) { exit 0 }
+    $account = Invoke-RestMethod -Uri ($base + '/api/status') -Headers $headers -TimeoutSec 5
+    if (!$account.connected -and !$account.busy -and $account.phase -eq 'idle') {
+        # A new UI process does not resume the saved LINE session on its own.
+        # Non-LINE rules must still be allowed to start if there is no LINE session.
+        try { Invoke-RestMethod -Uri ($base + '/api/resume') -Method Post -Headers $headers -ContentType 'application/json' -Body '{}' -TimeoutSec 45 | Out-Null } catch { }
+    }
     Invoke-RestMethod -Uri ($base + '/api/relay/start') -Method Post -Headers $headers -ContentType 'application/json' -Body '{"useRules":true}' -TimeoutSec 15 | Out-Null
 } catch { exit 1 }
 `;

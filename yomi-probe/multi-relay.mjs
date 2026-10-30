@@ -113,7 +113,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     state.errors += [...sources.values()].reduce((sum, source) => sum + source.failures, 0);
     state.sources = [...sources.values()].map(source => ({ ...source.endpoint, polls: source.polls, lastPoll: source.lastPoll, received: source.received, decryptFailed: source.decryptFailed, warning: source.warning }));
     state.phase = edges.every(edge => ['failed', 'blocked'].includes(edge.status.phase)) ? 'failed'
-      : edges.some(edge => edge.status.phase !== 'running' || edge.status.warning) || [...sources.values()].some(source => source.warning) ? 'degraded' : 'running';
+      : edges.some(edge => edge.status.phase !== 'running' || edge.status.warning) || [...sources.values()].some(source => source.warning && !source.historyOnly) ? 'degraded' : 'running';
     state.warning = state.phase === 'running' ? '' : '部分路線受阻，請查看各路線與來源狀態';
     state.stage = 'waiting';
   }
@@ -147,6 +147,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         source.received = messages.length;
         source.decryptFailed = messages.filter(message => message.e2eeDecryptFailure && Number(message.createdTime || message.deliveredTime) >= oldest).length;
         source.warning = source.decryptFailed ? '來源有文字無法解密，請確認 E2EE 金鑰' : health?.warning || '';
+        source.historyOnly = false;
         source.retryAt = 0; source.consecutiveErrors = 0;
         const filtered = messages.filter(message => !outputs.has(`${adapters[source.endpoint.platform].identity}:${key}:${message.id}`));
         batches.set(key, filtered);
@@ -157,11 +158,15 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
           edge.status.lastRead.filtered = candidates.length - edge.status.lastRead.matched;
         }
         if (!source.warning && live.some(edge => edge.status.lastRead.invalidTime > 0)) source.warning = '來源有訊息缺少有效時間，已略過；請回報此狀態供排查';
-        if (!source.warning && live.some(edge => edge.status.lastRead.history > 0)) source.warning = '來源有未處理訊息早於啟動基準，已略過；請核對電腦日期與時間';
+        if (!source.warning && live.some(edge => edge.status.lastRead.history > 0)) {
+          source.warning = '來源有早於此路線首次啟動的歷史訊息，已依規則略過';
+          source.historyOnly = true;
+        }
       } catch (error) {
         if (!(error instanceof OperationTimeout)) source.pendingRead = null;
         source.failures++; source.consecutiveErrors = (source.consecutiveErrors || 0) + 1;
         source.retryAt = now() + Math.min(60000, 3000 * 2 ** Math.min(source.consecutiveErrors - 1, 5));
+        source.historyOnly = false;
         source.warning = error instanceof RelayError ? error.message : '讀取失敗或超過補讀上限；退避重試，已保存的待送訊息繼續處理，請檢查登入與歷史訊息';
       } finally { reading.delete(key); }
     }));
