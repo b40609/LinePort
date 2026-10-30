@@ -1,7 +1,7 @@
 {
   "name": "lineport-desktop",
   "productName": "LinePort",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "LinePort 訊息轉發與監控桌面客戶端",
   "main": "main.cjs",
   "private": true,
