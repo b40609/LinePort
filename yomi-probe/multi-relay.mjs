@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { appendRecord, loadJournal, establishBaseline } from './relay-core.mjs';
 import { unseenText } from './relay-rules.mjs';
 import { createSettingsStore, configRevision, endpointKey, chatKey, matchingContent, textRejection } from './route-config.mjs';
-import { lineDirectory, readLineSince } from './line-directory.mjs';
+import { lineDirectory, readLineSince, LineHistoryError } from './line-directory.mjs';
+import { ProtocolReadError } from './protocol-guard.mjs';
 import { requireRelayEncryption, inspectRelayRead, relayFailure, RelayError, destinationEncryptionFailure } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
 import { createTelegramClient, createTelegramInbox, TelegramRateLimit } from './telegram.mjs';
@@ -133,12 +134,28 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       reading.add(key);
       try {
         const oldest = Math.min(...live.map(edge => edge.startedAt));
-        // Only stop paging at a checkpoint shared by EVERY active destination.
-        const known = new Set([...live[0].seen].filter(id => live.every(edge => edge.seen.has(id))));
+        // Each active route must have handled the message or be unable to forward it.
+        const known = message => {
+          const time = Number(message.createdTime || message.deliveredTime);
+          const hasText = typeof message.text === 'string' && Boolean(message.text.trim());
+          return live.every(edge => edge.seen.has(String(message.id)) || time < edge.startedAt
+            || (Number.isFinite(time) && !message.e2eeDecryptFailure && !hasText && !(edge.rule.media && message.media)));
+        };
+        // A checkpoint must be durable for every active route, not merely ignored.
+        known.checkpoint = message => {
+          const time = Number(message.createdTime || message.deliveredTime);
+          return live.every(edge => edge.seen.has(String(message.id)) || time < edge.startedAt);
+        };
         // Keep an outstanding read after timeout: retry must not spawn overlapping requests.
         source.pendingRead ||= Promise.resolve().then(() => adapters[source.endpoint.platform].read(source.endpoint.id, oldest, known));
         const messages = await withDeadline(source.pendingRead, operationTimeoutMs);
         source.pendingRead = null;
+        source.retryAt = 0; source.consecutiveErrors = 0;
+        if (messages === null) {
+          source.warning = 'LINE 正在分批補讀歷史訊息';
+          source.historyOnly = false;
+          return;
+        }
         const health = adapters[source.endpoint.platform].health?.();
         if (health) { source.polls = health.polls; source.lastPoll = health.lastPoll; }
         else { source.polls++; source.lastPoll = new Date(now()).toISOString(); }
@@ -148,7 +165,6 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         source.decryptFailed = messages.filter(message => message.e2eeDecryptFailure && Number(message.createdTime || message.deliveredTime) >= oldest).length;
         source.warning = source.decryptFailed ? '來源有文字無法解密，請確認 E2EE 金鑰' : health?.warning || '';
         source.historyOnly = false;
-        source.retryAt = 0; source.consecutiveErrors = 0;
         const filtered = messages.filter(message => !outputs.has(`${adapters[source.endpoint.platform].identity}:${key}:${message.id}`));
         batches.set(key, filtered);
         for (const edge of live) {
@@ -167,7 +183,13 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         source.failures++; source.consecutiveErrors = (source.consecutiveErrors || 0) + 1;
         source.retryAt = now() + Math.min(60000, 3000 * 2 ** Math.min(source.consecutiveErrors - 1, 5));
         source.historyOnly = false;
-        source.warning = error instanceof RelayError ? error.message : '讀取失敗或超過補讀上限；退避重試，已保存的待送訊息繼續處理，請檢查登入與歷史訊息';
+        if (error instanceof LineHistoryError) {
+          source.warning = 'LINE 歷史補讀游標無法前進，稍後重試';
+        } else if (error instanceof ProtocolReadError) {
+          source.warning = error.code === 'network_timeout' ? 'LINE 網路請求逾時，稍後重試' : 'LINE API 未回傳可用資料，稍後重試';
+        } else {
+          source.warning = error instanceof RelayError ? error.message : '來源讀取失敗，稍後重試';
+        }
       } finally { reading.delete(key); }
     }));
     // Commit the payload before advancing the source checkpoint.
@@ -312,6 +334,7 @@ export async function createLineRelayAdapter(service, endpoints, { downloadPhoto
     if (!allowed.has(id)) throw new RelayError('LINE 聊天室已不在群組或好友列表內');
   };
   const protection = new Map();
+  const scans = new Map();
   return {
     identity: `line:${service.profile.mid}`,
     async prepare(id) {
@@ -320,7 +343,18 @@ export async function createLineRelayAdapter(service, endpoints, { downloadPhoto
       protection.set(id, mode); return mode;
     },
     async recent(id) { check(id); return service.getRecentMessages(id, 50); },
-    async read(id, time, known) { check(id); return readLineSince(service, id, time, known); },
+    async read(id, time, known) {
+      check(id);
+      if (!scans.has(id)) scans.set(id, { messages: new Map() });
+      try {
+        const messages = await readLineSince(service, id, time, known, { progress: scans.get(id) });
+        if (messages !== null) scans.delete(id);
+        return messages;
+      } catch (error) {
+        if (error instanceof LineHistoryError) scans.delete(id);
+        throw error;
+      }
+    },
     preparePayload: text => typeof text === 'string' ? undefined : downloadPhoto
       ? downloadPhoto(text) : Promise.reject(new RelayError('Telegram 圖片來源未連結，待送已保留；請重新連結平台')),
     send(id, text, options = {}) {

@@ -38,19 +38,30 @@ export async function lineDirectory(service, { contacts = true, groups = true } 
   return [...chats, ...people];
 }
 
-export async function readLineSince(service, id, startedAt, known, { maxPages = 20 } = {}) {
-  let page = await service.getRecentMessages(id, 50);
-  const result = new Map();
-  for (let count = 0; ; count++) {
-    for (const message of page) if (message?.id) result.set(String(message.id), message);
-    // A mixed page may contain older unseen messages even when one checkpoint is known.
-    if (page.length < 50 || page.every(message => known.has(String(message.id)) || Number(message.createdTime || message.deliveredTime) < startedAt)) return [...result.values()];
-    if (count >= maxPages - 1) throw new Error('History window exceeded');
+export class LineHistoryError extends Error {}
+
+export async function readLineSince(service, id, startedAt, known, { maxPages = 20, progress } = {}) {
+  const scan = progress || { messages: new Map() };
+  const covered = typeof known === 'function' ? known : message => known.has(String(message.id));
+  const checkpoint = typeof known === 'function' && known.checkpoint ? known.checkpoint : covered;
+  for (let count = 0; count < maxPages; count++) {
+    const page = scan.cursor
+      ? await service.getPreviousMessages(id, 50, scan.cursor)
+      : await service.getRecentMessages(id, 50);
+    if (scan.cursor && page.length && page.every(message => scan.messages.has(String(message.id)))) {
+      throw new LineHistoryError('History cursor did not advance');
+    }
+    for (const message of page) if (message?.id) scan.messages.set(String(message.id), message);
+    // Ignored messages alone do not prove that older, eligible messages were handled.
+    const beforeStart = message => Number(message.createdTime || message.deliveredTime) < startedAt;
+    if (page.length < 50 || (page.some(message => checkpoint(message) || beforeStart(message))
+      && page.every(message => covered(message) || beforeStart(message)))) {
+      return [...scan.messages.values()];
+    }
     const oldest = [...page].sort((a, b) => Number(a.deliveredTime || a.createdTime) - Number(b.deliveredTime || b.createdTime))[0];
-    if (!oldest?.id || !oldest.deliveredTime) throw new Error('Missing history cursor');
-    const previous = await service.getPreviousMessages(id, 50, { messageId: oldest.id, deliveredTime: oldest.deliveredTime });
-    if (!previous.length) return [...result.values()];
-    if (previous.every(message => result.has(String(message.id)))) throw new Error('History cursor did not advance');
-    page = previous;
+    if (!oldest?.id || !oldest.deliveredTime) throw new LineHistoryError('Missing history cursor');
+    scan.cursor = { messageId: oldest.id, deliveredTime: oldest.deliveredTime };
   }
+  if (progress) return null;
+  throw new LineHistoryError('History window exceeded');
 }

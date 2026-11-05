@@ -71,6 +71,74 @@ test('LINE adapter completes relay initialization, sending and restart deduplica
   assert.equal(calls.filter(call => call[0] === 'send').length, 1);
 });
 
+test('LINE catches up beyond 20 pages after a transient failure without restarting the scan or sending duplicates', async () => {
+  const { service, calls, messages } = fixture();
+  const source = endpoint('csource'), destination = endpoint('cdestination');
+  const config = normalizeConfig({ version: 1, rules: [{ id: 'one', name: 'one', enabled: true, sources: [source], destinations: [destination] }] });
+  let clock = 1000, recentReads = 0, offline = false;
+  const cursors = [];
+  service.getRecentMessages = async () => { recentReads++; return messages.slice(0, 50); };
+  service.getPreviousMessages = async (id, count, cursor) => {
+    cursors.push(cursor.messageId);
+    if (offline) throw new Error('synthetic network interruption');
+    const index = messages.findIndex(message => message.id === cursor.messageId);
+    return messages.slice(index + 1, index + 1 + count);
+  };
+  const options = { config, directory: await mkdtemp(path.join(os.tmpdir(), 'lineport-backlog-')),
+    now: () => clock, pause: async () => {}, deliveryBudget: 30 };
+  const start = async () => createMultiRelay({ ...options, adapters: { line: await createLineRelayAdapter(service, [source, destination]) } });
+  const relay = await start();
+  messages.push(...Array.from({ length: 1051 }, (_, index) => ({
+    id: String(index + 1), createdTime: 3000 - index, deliveredTime: 3000 - index,
+    text: index % 50 === 0 ? 'message ' + index : '', contentType: index % 50 === 0 ? 0 : 7,
+  })));
+  await relay.tick();
+  assert.match(relay.state.sources[0].warning, /分批補讀/);
+  assert.equal(cursors.length, 19);
+  assert.equal(relay.state.forwarded, 0);
+
+  offline = true;
+  await relay.tick();
+  assert.match(relay.state.sources[0].warning, /讀取失敗/);
+  assert.equal(cursors.at(-1), '1000');
+
+  offline = false;
+  clock += 3000;
+  await relay.tick();
+  assert.equal(cursors.at(-2), '1000');
+  assert.equal(recentReads, 2);
+  assert.equal(relay.state.phase, 'running');
+  assert.equal(relay.state.forwarded, 22);
+  const forwarded = () => calls.filter(call => call[0] === 'send').map(call => call[2]);
+  assert.deepEqual(forwarded(), Array.from({ length: 22 }, (_, index) => 'message ' + (1050 - index * 50)));
+
+  const restarted = await start();
+  const previousReads = cursors.length;
+  await restarted.tick();
+  assert.equal(cursors.length, previousReads);
+  assert.equal(forwarded().length, 22);
+  assert.equal(restarted.state.phase, 'running');
+});
+
+test('LINE does not skip older unseen text behind a full page of ignored messages', async () => {
+  const { service, calls, messages } = fixture();
+  const source = endpoint('csource'), destination = endpoint('cdestination');
+  const config = normalizeConfig({ version: 1, rules: [{ id: 'one', enabled: true, sources: [source], destinations: [destination] }] });
+  messages.push({ id: 'baseline', text: 'old', createdTime: 1001, deliveredTime: 1001 });
+  service.getRecentMessages = async () => messages.slice(0, 50);
+  service.getPreviousMessages = async (id, count, cursor) => {
+    const index = messages.findIndex(message => message.id === cursor.messageId);
+    return messages.slice(index + 1, index + 1 + count);
+  };
+  const relay = await createMultiRelay({ config, adapters: { line: await createLineRelayAdapter(service, [source, destination]) },
+    directory: await mkdtemp(path.join(os.tmpdir(), 'lineport-ignored-page-')), now: () => 1000, pause: async () => {} });
+  messages.unshift(...Array.from({ length: 50 }, (_, index) => ({
+    id: 'ignored-' + index, text: '', createdTime: 3000 - index, deliveredTime: 3000 - index,
+  })), { id: 'unseen', text: 'must be forwarded', createdTime: 2000, deliveredTime: 2000 });
+  await relay.tick();
+  assert.deepEqual(calls.filter(call => call[0] === 'send').map(call => call[2]), ['must be forwarded']);
+});
+
 test('bot destinations automatically use compatible text while other routes retain E2EE and restart deduplication', async () => {
   const { service, calls, messages } = fixture();
   service.client.getAllChatMids = async () => ({ memberChats: ['csource', 'cdestination', 'cgood'] });
