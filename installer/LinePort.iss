@@ -38,6 +38,7 @@ RestartApplications=no
 Uninstallable=not IsSmokeTest
 CreateUninstallRegKey=not IsSmokeTest
 UninstallDisplayIcon={code:GetPayloadDirectory}\LinePort.exe
+SetupIconFile=..\src\LinePort.Launcher\LinePort.ico
 VersionInfoVersion={#AppFileVersion}
 VersionInfoProductVersion={#AppFileVersion}
 VersionInfoProductTextVersion={#AppVersion}

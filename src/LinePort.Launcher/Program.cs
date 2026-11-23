@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Net.Http.Headers;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -22,11 +24,13 @@ if (!trayOnly) {
             return;
         }
     } catch (AbandonedMutexException) { }
+    using var windowIcon = AppBranding.LoadIcon();
     using var window = new Form {
         Text = "LinePort", Width = 460, Height = 180,
         StartPosition = FormStartPosition.CenterScreen,
         FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false
     };
+    if (windowIcon != null) window.Icon = windowIcon;
     var label = new Label {
         Text = "正在啟動 LinePort…\n如有舊版，會自動停止並切換，請稍候。",
         Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter,
@@ -91,8 +95,9 @@ sealed class TrayContext : ApplicationContext {
     bool busy;
 
     public TrayContext() {
+        using var baseLogo = AppBranding.LoadBitmap(32);
         foreach (var (name, color) in new[] { ("green", Color.FromArgb(6, 199, 85)), ("yellow", Color.FromArgb(240, 180, 0)), ("red", Color.FromArgb(220, 53, 69)), ("gray", Color.FromArgb(140, 150, 145)) })
-            icons[name] = Dot(color);
+            icons[name] = Dot(baseLogo, color);
         var menu = new ContextMenuStrip();
         menu.Items.Add("開啟本機頁面", null, (_, _) => OpenPage());
         restartItem = new ToolStripMenuItem("重啟轉送", null, async (_, _) => await RestartRelay());
@@ -109,17 +114,29 @@ sealed class TrayContext : ApplicationContext {
         _ = Refresh();
     }
 
-    static Icon Dot(Color color) {
-        using var bitmap = new Bitmap(16, 16);
+    static Icon Dot(Bitmap? baseLogo, Color color) {
+        using var bitmap = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bitmap)) {
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
             g.Clear(Color.Transparent);
-            using var fill = new SolidBrush(color);
-            using var edge = new Pen(Color.FromArgb(60, 0, 0, 0));
-            g.FillEllipse(fill, 1, 1, 13, 13);
-            g.DrawEllipse(edge, 1, 1, 13, 13);
+            if (baseLogo != null) {
+                g.DrawImage(baseLogo, 0, 0, 32, 32);
+                using var ring = new SolidBrush(Color.White);
+                using var fill = new SolidBrush(color);
+                using var edge = new Pen(Color.FromArgb(90, 0, 0, 0), 1f);
+                g.FillEllipse(ring, 17, 17, 15, 15);
+                g.FillEllipse(fill, 19, 19, 11, 11);
+                g.DrawEllipse(edge, 19, 19, 11, 11);
+            } else {
+                using var fill = new SolidBrush(color);
+                using var edge = new Pen(Color.FromArgb(60, 0, 0, 0));
+                g.FillEllipse(fill, 2, 2, 26, 26);
+                g.DrawEllipse(edge, 2, 2, 26, 26);
+            }
         }
-        return Icon.FromHandle(bitmap.GetHicon());
+        return AppBranding.CreateOwnedIcon(bitmap);
     }
 
     static void OpenPage() {
@@ -244,5 +261,37 @@ sealed class TrayContext : ApplicationContext {
         http.Dispose();
         foreach (var value in icons.Values) value.Dispose();
         base.ExitThreadCore();
+    }
+}
+
+static class AppBranding {
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool DestroyIcon(IntPtr hIcon);
+
+    public static Icon? LoadIcon(int size = 32) {
+        try {
+            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("LinePort.ico");
+            if (stream != null) return new Icon(stream, size, size);
+        } catch { }
+        try {
+            var exe = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(exe) && File.Exists(exe)) return Icon.ExtractAssociatedIcon(exe);
+        } catch { }
+        return null;
+    }
+
+    public static Bitmap? LoadBitmap(int size = 32) {
+        using var ico = LoadIcon(size);
+        return ico?.ToBitmap();
+    }
+
+    public static Icon CreateOwnedIcon(Bitmap bitmap) {
+        var handle = bitmap.GetHicon();
+        try {
+            using var raw = Icon.FromHandle(handle);
+            return (Icon)raw.Clone();
+        } finally {
+            DestroyIcon(handle);
+        }
     }
 }
