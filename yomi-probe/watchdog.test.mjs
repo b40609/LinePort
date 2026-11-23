@@ -86,12 +86,13 @@ test('a manual stop, a failed relay needing review, or relay autostart off are l
   assert.equal(await logOf(directory), '');
 });
 
-test('the circuit breaker allows three restarts per window and logs once when it opens', windowsOnly, async t => {
+test('the circuit breaker allows three restarts per window and logs and notifies once when it opens', windowsOnly, async t => {
   const directory = await home(t), url = await deadUrl();
   for (let index = 0; index < 5; index++) assert.equal((await watchdog(directory, url)).code, 0);
   const log = await logOf(directory);
   assert.equal(log.match(/recovering:/g).length, 3);
   assert.equal(log.match(/circuit open/g).length, 1);
+  assert.equal(log.match(/\[dry-run\] would notify: LinePort 看門狗已暫停自動重啟/g).length, 1);
   const state = JSON.parse((await readFile(path.join(directory, 'watchdog-state.json'), 'utf8')).replace(/^\uFEFF/, ''));
   assert.equal(state.restarts.length, 3);
 });
@@ -116,10 +117,54 @@ test('task installer dry run describes logon and 5-minute triggers without touch
   assert.match(uninstall.stdout, /would unregister task LinePort-Test-DryRun/);
 });
 
-test('watchdog scripts parse without errors in Windows PowerShell', windowsOnly, async () => {
-  for (const script of ['watchdog.ps1', 'install-watchdog.ps1']) {
+test('watchdog and prune scripts parse without errors in Windows PowerShell', windowsOnly, async () => {
+  const watchdogRaw = await readFile(path.join(root, 'watchdog.ps1'), 'utf8');
+  assert.ok(watchdogRaw.startsWith('\uFEFF'), 'watchdog.ps1 must carry UTF-8 BOM for Windows PowerShell 5.1 Chinese strings');
+  for (const script of ['watchdog.ps1', 'install-watchdog.ps1', 'prune-versions.ps1']) {
     const command = `$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile('${path.join(root, script)}', [ref]$null, [ref]$errors) | Out-Null; if ($errors) { $errors | ForEach-Object { $_.Message }; exit 1 }`;
     const result = await new Promise(resolve => execFile(shell, ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true }, (error, stdout) => resolve({ code: error ? error.code : 0, stdout })));
     assert.equal(result.code, 0, `${script}: ${result.stdout}`);
   }
+});
+
+test('prune-versions keeps current and previous complete versions, removes older and stale incomplete ones, and rejects unsafe paths', windowsOnly, async t => {
+  const { utimes } = await import('node:fs/promises');
+  const base = await mkdtemp(path.join(os.tmpdir(), 'lineport-prune-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const versions = path.join(base, 'versions');
+  await mkdir(versions, { recursive: true });
+  const makeComplete = async name => {
+    await mkdir(path.join(versions, name, 'yomi-probe'), { recursive: true });
+    await writeFile(path.join(versions, name, 'LinePort.exe'), '');
+    await writeFile(path.join(versions, name, 'yomi-probe', 'package.json'), '{}');
+  };
+  for (const name of ['1.0.0-rc.2-20261022095752', '1.0.0-rc.3-20261029124805', '1.0.2-20261123121108', '1.1.0-20261123173000']) {
+    await makeComplete(name);
+  }
+  // Stale incomplete install residue (2 hours old) and fresh incomplete folder (should be spared).
+  const stalePartial = path.join(versions, '1.0.2-20261123121009');
+  const freshPartial = path.join(versions, '1.1.0-20261123173100');
+  const unrelated = path.join(versions, 'keep-unrelated');
+  for (const dir of [stalePartial, freshPartial, unrelated]) await mkdir(dir, { recursive: true });
+  const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000);
+  await utimes(stalePartial, twoHoursAgo, twoHoursAgo);
+
+  const rejected = await run('prune-versions.ps1', ['-VersionsRoot', base, '-DryRun']);
+  assert.notEqual(rejected.code, 0, 'must refuse non-versions directory');
+
+  const dry = await run('prune-versions.ps1', ['-VersionsRoot', versions, '-CurrentDirectory', path.join(versions, '1.1.0-20261123173000'), '-Keep', '2', '-DryRun']);
+  assert.equal(dry.code, 0, dry.stderr);
+  assert.match(dry.stdout, /would remove: 1\.0\.0-rc\.3-20261029124805/);
+  assert.match(dry.stdout, /would remove: 1\.0\.0-rc\.2-20261022095752/);
+  assert.match(dry.stdout, /would remove: 1\.0\.2-20261123121009/);
+  assert.doesNotMatch(dry.stdout, /1\.1\.0-20261123173000/);
+  assert.doesNotMatch(dry.stdout, /1\.0\.2-20261123121108/);
+  assert.doesNotMatch(dry.stdout, /1\.1\.0-20261123173100/);
+  assert.doesNotMatch(dry.stdout, /keep-unrelated/);
+
+  const applied = await run('prune-versions.ps1', ['-VersionsRoot', versions, '-CurrentDirectory', path.join(versions, '1.1.0-20261123173000'), '-Keep', '2']);
+  assert.equal(applied.code, 0, applied.stderr);
+  const { readdir } = await import('node:fs/promises');
+  const remaining = (await readdir(versions)).sort();
+  assert.deepEqual(remaining, ['1.0.2-20261123121108', '1.1.0-20261123173000', '1.1.0-20261123173100', 'keep-unrelated']);
 });

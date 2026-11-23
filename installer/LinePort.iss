@@ -47,6 +47,7 @@ Name: "zhTW"; MessagesFile: "compiler:Languages\ChineseTraditional.isl"
 
 [Tasks]
 Name: "autostart"; Description: "登入 Windows 時自動啟動 LinePort（預設啟用；之後可在頁面「開機自動啟動」或 Windows 啟動設定中個別關閉）"
+Name: "watchdog"; Description: "安裝本機看門狗排程（每 5 分鐘檢查服務，防止意外中斷；不會覆蓋手動停止）"
 
 [Files]
 Source: "{#PayloadRoot}\*"; DestDir: "{code:GetPayloadDirectory}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -61,6 +62,9 @@ Name: "{autodesktop}\LinePort"; Filename: "{code:GetPayloadDirectory}\LinePort.e
 ; The autostart task records the choice where the app's page toggle reads and manages it.
 Root: HKCU; Subkey: "Software\LinePort"; ValueType: string; ValueName: "AutostartTask"; ValueData: "{code:GetAutostartChoice}"; Flags: uninsdeletevalue; Check: not IsSmokeTest
 
+[UninstallRun]
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command ""if (Get-ScheduledTask -TaskName 'LinePort-Service-Recovery' -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName 'LinePort-Service-Recovery' -Confirm:$false }"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveWatchdogTask"
+
 [UninstallDelete]
 ; Uninstalling must not leave Startup entries that call into a removed payload.
 Type: files; Name: "{userappdata}\Microsoft\Windows\Start Menu\Programs\Startup\LinePort 自動啟動.lnk"
@@ -68,6 +72,9 @@ Type: files; Name: "{userappdata}\Microsoft\Windows\Start Menu\Programs\Startup\
 Type: files; Name: "{localappdata}\LinePort\autostart-service.ps1"
 Type: files; Name: "{localappdata}\LinePort\autostart-relay.ps1"
 Type: files; Name: "{localappdata}\LinePort\autostart.json"
+Type: files; Name: "{localappdata}\LinePort\watchdog.ps1"
+Type: files; Name: "{localappdata}\LinePort\watchdog-state.json"
+Type: files; Name: "{localappdata}\LinePort\relay-intent.json"
 
 [Code]
 function GetAutostartChoice(Param: String): String;
@@ -76,6 +83,8 @@ begin
 end;
 
 [Run]
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{code:GetPayloadDirectory}\yomi-probe\install-watchdog.ps1"""; StatusMsg: "正在設定看門狗排程…"; Flags: runhidden waituntilterminated; Tasks: watchdog; Check: not IsSmokeTest
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{code:GetPayloadDirectory}\yomi-probe\prune-versions.ps1"" -VersionsRoot ""{app}\versions"" -CurrentDirectory ""{code:GetPayloadDirectory}"" -Keep 2"; StatusMsg: "正在清理過舊版本目錄…"; Flags: runhidden waituntilterminated; Check: not IsSmokeTest
 Filename: "{code:GetPayloadDirectory}\LinePort.exe"; Description: "啟動 LinePort"; Flags: nowait postinstall skipifsilent; Check: not IsSmokeTest
 
 [Code]

@@ -35,7 +35,7 @@ export function previewRules(input) {
 }
 
 export function settingsBackup(config, healthAlert) {
-  return { format: 'lineport-settings', version: 1, appVersion: '1.0.2', exportedAt: new Date().toISOString(), config: normalizeConfig(config),
+  return { format: 'lineport-settings', version: 1, appVersion: '1.1.0', exportedAt: new Date().toISOString(), config: normalizeConfig(config),
     ...(healthAlert ? { healthAlert: normalizeHealthAlert(healthAlert) } : {}) };
 }
 // Optional and absent from older backups; undefined means "leave current alert settings unchanged".
@@ -51,7 +51,7 @@ export function validateBackup(backup) {
 export function safeDiagnostics(relay, connected) {
   const count = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
   const phases = new Set(['running', 'stopped', 'starting', 'degraded', 'failed', 'blocked', 'unavailable', 'legacy']);
-  return { format: 'lineport-diagnostics', version: 1, appVersion: '1.0.2', exportedAt: new Date().toISOString(), lineConnected: connected === true,
+  return { format: 'lineport-diagnostics', version: 1, appVersion: '1.1.0', exportedAt: new Date().toISOString(), lineConnected: connected === true,
     phase: phases.has(relay.phase) ? relay.phase : 'unavailable',
     stage: safeRelayStage(relay.stage),
     totals: Object.fromEntries(['forwarded', 'uncertain', 'errors', 'polls'].map(key => [key, count(relay[key])])),

@@ -215,8 +215,8 @@ test('home has nonce CSP, no-store and no unresolved placeholders', async t => {
   assert.match(result.headers['content-security-policy'], /script-src 'nonce-/);
   assert.equal(result.headers['cache-control'], 'no-store');
   assert.ok(!result.body.includes('__TOKEN__') && !result.body.includes('__NONCE__'));
-  assert.match(result.body, /v1\.0\.2 · LINE · Telegram/);
-  assert.match(result.body, /releases\/tag\/v1\.0\.2/);
+  assert.match(result.body, /v1\.1\.0 · LINE · Telegram/);
+  assert.match(result.body, /releases\/tag\/v1\.1\.0/);
 });
 test('isolated HTTP download, backup validation and restore preserve pre-restore settings', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-api-acceptance-'));
@@ -241,9 +241,9 @@ test('isolated HTTP download, backup validation and restore preserve pre-restore
   }
   const backup = JSON.parse(backupReply.body);
   const diagnostics = JSON.parse(diagnosticReply.body);
-  assert.equal(backup.appVersion, '1.0.2');
+  assert.equal(backup.appVersion, '1.1.0');
   assert.deepEqual(backup.config, original);
-  assert.equal(diagnostics.appVersion, '1.0.2');
+  assert.equal(diagnostics.appVersion, '1.1.0');
   assert.equal(diagnostics.stage, 'unknown');
   assert.equal(diagnostics.routes[0].stage, 'destination_e2ee');
   assert.equal(diagnostics.routes[0].failureReason, 'missing_receiver_key');

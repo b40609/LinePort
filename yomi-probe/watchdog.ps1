@@ -1,4 +1,4 @@
-# LinePort watchdog: run by the "LinePort-Service-Recovery" scheduled task (at logon and every
+﻿# LinePort watchdog: run by the "LinePort-Service-Recovery" scheduled task (at logon and every
 # 5 minutes). It only restarts what autostart says should be running, never undoes a manual
 # relay stop, and stops itself after too many restarts. No token or message text is logged.
 param(
@@ -21,6 +21,33 @@ function Write-WatchdogLog([string]$Message) {
         # Retry briefly: antivirus scans can hold the log file for a moment.
         for ($try = 0; $try -lt 5; $try++) { try { Set-Content -LiteralPath $logPath -Value (@($kept) + $entry) -Encoding UTF8; break } catch { Start-Sleep -Milliseconds 200 } }
     } catch { }
+}
+function Send-WatchdogToast([string]$Title, [string]$Body) {
+    $safeTitle = ($Title -replace '[\x00-\x1f\x7f]', ' ').Trim()
+    $safeBody = ($Body -replace '[\x00-\x1f\x7f]', ' ').Trim()
+    if ($safeTitle.Length -gt 120) { $safeTitle = $safeTitle.Substring(0, 120) }
+    if ($safeBody.Length -gt 200) { $safeBody = $safeBody.Substring(0, 200) }
+    if ($DryRun) { Write-WatchdogLog "[dry-run] would notify: $safeTitle - $safeBody"; return }
+    try {
+        $escapedTitle = [Security.SecurityElement]::Escape($safeTitle)
+        $escapedBody = [Security.SecurityElement]::Escape($safeBody)
+        $aumid = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+        $xml.LoadXml("<toast scenario='reminder'><visual><binding template='ToastGeneric'><text>$escapedTitle</text><text>$escapedBody</text></binding></visual><actions><action content='OK' arguments='dismiss' activationType='system'/></actions></toast>")
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($aumid).Show([Windows.UI.Notifications.ToastNotification]::new($xml))
+    } catch {
+        try {
+            Add-Type -AssemblyName System.Windows.Forms
+            $notify = New-Object System.Windows.Forms.NotifyIcon
+            $notify.Icon = [System.Drawing.SystemIcons]::Warning
+            $notify.Visible = $true
+            $notify.ShowBalloonTip(10000, $safeTitle, $safeBody, [System.Windows.Forms.ToolTipIcon]::Warning)
+            Start-Sleep -Seconds 12
+            $notify.Dispose()
+        } catch { }
+    }
 }
 function Read-JsonFile($Path) {
     if (!(Test-Path -LiteralPath $Path)) { return $null }
@@ -71,9 +98,10 @@ try {
     $recent = @(@($state.restarts) | Where-Object { $_ } | ForEach-Object { [datetime]::Parse($_, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) } | Where-Object { ($now - $_).TotalMinutes -lt $WindowMinutes })
     $reason = 'service ' + $(if ($serviceUp) { 'up' } else { 'down' }) + ', relay ' + $relayPhase
     if ($recent.Count -ge $MaxRestarts) {
-        # Circuit breaker: log once per open window, then stay quiet until restarts age out.
+        # Circuit breaker: log and notify once per open window, then stay quiet until restarts age out.
         if (!$state.circuitLoggedAt -or ($now - [datetime]::Parse($state.circuitLoggedAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)).TotalMinutes -ge $WindowMinutes) {
             Write-WatchdogLog "circuit open: $($recent.Count) restarts within $WindowMinutes minutes; not restarting ($reason). Check autostart.log and the LinePort page."
+            Send-WatchdogToast 'LinePort 看門狗已暫停自動重啟' "服務連續重啟 $($recent.Count) 次仍無法恢復（$reason），請開啟 LinePort 並檢查 autostart.log。"
             Save-State @{ restarts = @($recent | ForEach-Object { $_.ToString('o') }); circuitLoggedAt = $now.ToString('o') }
         }
         exit 0
