@@ -63,7 +63,7 @@ Name: "{autodesktop}\LinePort"; Filename: "{code:GetPayloadDirectory}\LinePort.e
 Root: HKCU; Subkey: "Software\LinePort"; ValueType: string; ValueName: "AutostartTask"; ValueData: "{code:GetAutostartChoice}"; Flags: uninsdeletevalue; Check: not IsSmokeTest
 
 [UninstallRun]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command ""if (Get-ScheduledTask -TaskName 'LinePort-Service-Recovery' -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName 'LinePort-Service-Recovery' -Confirm:$false }"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveWatchdogTask"
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command ""if (Get-ScheduledTask -TaskName 'LinePort-Service-Recovery' -ErrorAction SilentlyContinue) {{ Unregister-ScheduledTask -TaskName 'LinePort-Service-Recovery' -Confirm:$false }"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveWatchdogTask"
 
 [UninstallDelete]
 ; Uninstalling must not leave Startup entries that call into a removed payload.
