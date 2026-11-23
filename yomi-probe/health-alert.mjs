@@ -11,6 +11,7 @@ const titles = {
   route_uncertain: '路線已暫停：發送結果不明，需人工核對',
   route_blocked: '路線已暫停',
   route_failed: '路線失敗停止',
+  route_quarantined: '有訊息被平台明確拒絕，已單筆隔離（路線繼續運作）',
   relay_failed: '轉送程序失敗',
   line_login_required: 'LINE 登入已失效，需要重新授權',
   source_read_failing: '來源連續讀取失敗，轉送暫停中',
@@ -27,6 +28,14 @@ export function healthEvents({ relay = {}, account = {}, storage = null } = {}) 
     const ids = Array.isArray(route.uncertainIds) ? route.uncertainIds.map(clean).filter(Boolean).slice(-5) : [];
     events.push({ key: `route:${clean(route.key) || index}`, kind, subject: clean(route.name), stage: clean(route.stage), ids,
       signature: [kind, route.stage, Number(route.uncertain) || 0, ids.join(',')].join('|') });
+  });
+  // Soft dead-letter: informational, alerted once per new quarantined ID during this run.
+  routes.forEach((route, index) => {
+    const count = Number(route?.quarantinedSinceStart) || 0;
+    if (!count) return;
+    const ids = Array.isArray(route.quarantineIds) ? route.quarantineIds.map(clean).filter(Boolean).slice(-5) : [];
+    events.push({ key: `quarantine:${clean(route.key) || index}`, kind: 'route_quarantined', subject: clean(route.name), ids, informational: true,
+      signature: ['route_quarantined', count, ids.join(',')].join('|') });
   });
   if (relay.phase === 'failed' && !routes.length) events.push({ key: 'relay', kind: 'relay_failed', stage: clean(relay.stage), signature: `relay_failed|${relay.stage}` });
   const sources = Array.isArray(relay.sources) ? relay.sources : [];
@@ -52,7 +61,7 @@ export function formatAlert(event, at) {
   return ['⚠️ LinePort 健康告警', `事件：${event.title}`,
     ...(event.subject ? [`${event.key.startsWith('source:') ? '來源' : '路線'}：${event.subject}`] : []),
     ...(event.stage ? [`階段：${event.stage}`] : []),
-    ...(event.ids?.length ? [`待核對訊息 ID：${event.ids.join(', ')}`] : []),
+    ...(event.ids?.length ? [`${event.kind === 'route_quarantined' ? '已隔離訊息 ID' : '待核對訊息 ID'}：${event.ids.join(', ')}`] : []),
     `時間：${formatTime(at)}`, '請開啟 LinePort 本機頁面查看與處理。'].join('\n');
 }
 export const formatRecovery = at => ['✅ LinePort 已恢復', '所有路線恢復正常運作（running）。', `時間：${formatTime(at)}`].join('\n');
@@ -84,15 +93,15 @@ export function createHealthMonitor({ channels, now = Date.now, cooldownMs = 6 *
         if (relayUp) for (const key of [...state.active.keys()]) if (!keys.has(key)) state.active.delete(key);
         for (const event of events) {
           const previous = state.active.get(event.key);
-          if (previous && previous.signature === event.signature && at - previous.sentAt < cooldownMs) continue;
+          if (previous && previous.signature === event.signature && (event.informational || at - previous.sentAt < cooldownMs)) continue;
           // Undelivered alerts are retried on the next check rather than marked sent.
           if (!await attempt(() => channel.send(formatAlert(event, at), event), sendTimeoutMs)) continue;
-          state.active.set(event.key, { signature: event.signature, sentAt: at }); state.recover = true;
+          state.active.set(event.key, { signature: event.signature, sentAt: at }); if (!event.informational) state.recover = true;
           delivered.push({ channel: channel.name, kind: event.kind });
         }
-        if (!events.length && state.recover && snapshot.relay?.phase === 'running'
+        if (!events.some(event => !event.informational) && state.recover && snapshot.relay?.phase === 'running'
           && await attempt(() => channel.send(formatRecovery(at), { kind: 'recovered', title: 'LinePort 已恢復' }), sendTimeoutMs)) {
-          state.recover = false; state.active.clear(); delivered.push({ channel: channel.name, kind: 'recovered' });
+          state.recover = false; for (const [key] of state.active) if (!key.startsWith('quarantine:')) state.active.delete(key); delivered.push({ channel: channel.name, kind: 'recovered' });
         }
       }
       return delivered;

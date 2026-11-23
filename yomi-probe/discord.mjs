@@ -29,6 +29,9 @@ export function createDiscordClient(token, { request = fetch } = {}) {
       const result = await response.json();
       if (!response.ok) {
         if (response.status === 429 && typeof result.retry_after === 'number' && Number.isFinite(result.retry_after) && result.retry_after > 0 && result.retry_after <= 2147483 && typeof result.global === 'boolean') throw new DiscordRateLimit(result.retry_after);
+        // Invalid form body (50035), empty message (50006), payload or file too large (40005, 50045, 413) concern this message only.
+        const permanent = response.status === 413 || response.status === 400 && [50035, 50006, 40005, 50045].includes(result?.code);
+        if (permanent) throw Object.assign(new RelayError('Discord 拒絕此則內容（格式、長度或附件不被接受）'), { status: response.status, rejected: true, permanent: true });
         throw Object.assign(new RelayError(({ 401: 'Discord Bot Token 無效；請重新連結', 403: 'Discord Bot 權限不足；請確認已加入伺服器並允許查看、發送訊息及附加檔案', 404: 'Discord 找不到頻道；請核對頻道 ID 與 Bot 存取權限', 413: 'Discord 拒絕：附件超過伺服器上傳上限' })[response.status] || 'Discord API 拒絕操作；請檢查頻道及權限後重試'),
           { status: response.status, rejected: true });
       }

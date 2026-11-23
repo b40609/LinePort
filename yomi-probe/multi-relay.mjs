@@ -54,7 +54,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
   for (const rule of config.rules.filter(rule => rule.enabled)) for (const source of rule.sources) for (const destination of rule.destinations) {
     const sourceKey = endpointKey(source), destinationKey = endpointKey(destination);
     const status = { key: digest([sourceKey, destinationKey]).slice(0, 24), ruleId: rule.id, name: rule.name, source, destination,
-      phase: 'starting', stage: 'baseline', forwarded: 0, uncertain: 0, errors: 0, skipped: 0, deduplicated: 0, pending: 0, lastSend: null, warning: '' };
+      phase: 'starting', stage: 'baseline', forwarded: 0, uncertain: 0, errors: 0, skipped: 0, deduplicated: 0, quarantined: 0, pending: 0, lastSend: null, warning: '' };
     state.routes.push(status);
     const edge = { rule, source, destination, status, seen: new Set(), startedAt: now() };
     edges.push(edge);
@@ -65,7 +65,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       const from = adapters[source.platform], to = adapters[destination.platform];
       if (!from || !to) throw new RelayError(platformErrors[!from ? source.platform : destination.platform] || '此平台尚未連結，請先設定帳號');
       const identity = digest([rule.id, from.identity, sourceKey, to.identity, destinationKey]);
-      edge.file = path.join(directory, `lineport-route-${identity}.jsonl`);
+      edge.file = path.join(directory, `lineport-route-${identity}.jsonl`); edge.identity = identity;
       edge.record = row => writeRecord(edge.file, row);
       status.stage = 'journal';
       const saved = await loadJournal(edge.file);
@@ -86,6 +86,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       // A manual fast-forward treats everything before the decision as history for this route.
       if (reviewed.fastForwardAt > edge.startedAt) { edge.startedAt = reviewed.fastForwardAt; status.fastForwardAt = new Date(reviewed.fastForwardAt).toISOString(); }
       status.pending = edge.pending.size;
+      if (reviewed.quarantined.length) { status.quarantined = reviewed.quarantined.length; status.quarantineIds = reviewed.quarantined.slice(-5).map(row => row.id); }
       if (unresolved.size) {
         status.phase = 'blocked'; status.stage = 'send_uncertain'; status.uncertain = unresolved.size; status.uncertainIds = [...unresolved].slice(0, 5);
         status.warning = '有發送結果不明的訊息，已暫停此路線；請停止轉送，到人工處理逐筆核對。重啟不會自動重送。';
@@ -136,6 +137,19 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     const minute = Math.floor((time + 8 * 3600000) / 60000) % 1440;
     if (minute >= 60 && minute < 360) return 30000; // 01:00-06:00 Asia/Taipei
     return idle < 30 * 60000 ? 10000 : 15000;
+  }
+  // Soft dead-letter: a message the platform definitively rejected for its own content (never an
+  // uncertain send) is set aside with an audit row so later messages keep flowing. More than three in
+  // a row suggests a configuration problem, so the route pauses instead.
+  async function quarantine(edge, id, error, phase) {
+    if (error?.permanent !== true || (edge.quarantineStreak || 0) >= 3) return false;
+    edge.quarantineStreak = (edge.quarantineStreak || 0) + 1;
+    const reason = String(error.message || '平台拒絕').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
+    await writeRecord(path.join(directory, `lineport-review-${edge.identity}.jsonl`), { version: 3, id, decision: 'skip', quarantined: true, phase, reason, at: now() });
+    edge.pending.delete(id); edge.seen.add(id);
+    edge.status.quarantined++; edge.status.quarantinedSinceStart = (edge.status.quarantinedSinceStart || 0) + 1; edge.status.quarantineIds = [...(edge.status.quarantineIds || []), id].slice(-5);
+    edge.status.stage = 'waiting';
+    return true;
   }
   refresh();
   async function tick({ sourceKeys = [...sources.keys()], deliver = true } = {}) {
@@ -272,8 +286,15 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             status.stage = 'prepare';
             // Attachments may take longer to download and upload than a text message.
             const deadline = typeof text === 'string' ? operationTimeoutMs : operationTimeoutMs * 4;
-            const prepared = adapters[edge.destination.platform].preparePayload
-              ? await withDeadline(adapters[edge.destination.platform].preparePayload(text), deadline) : undefined;
+            let prepared;
+            try {
+              prepared = adapters[edge.destination.platform].preparePayload
+                ? await withDeadline(adapters[edge.destination.platform].preparePayload(text), deadline) : undefined;
+            } catch (error) {
+              // Nothing was sent yet: an attachment that can never be prepared is quarantined, others pause the route.
+              if (await quarantine(edge, id, error, 'prepare')) continue;
+              throw error;
+            }
             status.stage = 'journal';
             await edge.record({ id, outcome: 'sending' }); edge.seen.add(id);
             status.stage = 'send';
@@ -313,6 +334,8 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
                 status.stage = 'waiting';
                 break;
               }
+              // A definite per-message rejection with nothing delivered is quarantined, never retried or resent.
+              if (error?.rejected === true && deliveredChunks === 0 && await quarantine(edge, id, error, 'send')) continue;
               // Only a request that provably never left this machine may be retried; any delivered chunk
               // means a retry would duplicate it, so that case stays uncertain.
               if (error?.unsent === true && deliveredChunks === 0) {
@@ -337,7 +360,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             const acknowledged = destinationReply(edge.destination.platform, edge.destination.id, result.id);
             await edge.record({ id, outcome: 'sent', ...(acknowledged ? { destinationId: acknowledged } : {}) });
             if (acknowledged) edge.delivered.set(id, acknowledged);
-            edge.pending.delete(id); edge.unsentFailures = 0;
+            edge.pending.delete(id); edge.unsentFailures = 0; edge.quarantineStreak = 0;
             status.forwarded++; status.lastSend = new Date(now()).toISOString();
           }
           status.stage = 'waiting';

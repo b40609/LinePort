@@ -34,10 +34,17 @@ async function readDelivery(directory, identity) {
   }
   const review = await readOptional(path.join(directory, `lineport-review-${identity}.jsonl`));
   if (review && !review.endsWith('\n')) throw new Error('Incomplete review journal');
-  const resolutions = [];
+  const resolutions = [], quarantined = [];
   let fastForwardAt = 0;
   for (const line of review.split('\n').filter(Boolean)) {
     const row = JSON.parse(line);
+    // Version 3: automatic soft quarantine of a definite per-message rejection (queued or attempted, never uncertain).
+    if (row.version === 3) {
+      if (row.quarantined !== true || row.decision !== 'skip' || !['prepare', 'send'].includes(row.phase) || typeof row.reason !== 'string' || row.reason.length > 200
+        || !Number.isSafeInteger(row.at) || row.at <= 0 || !(saved.pending.has(row.id) || unresolved.has(row.id))) throw new Error('Invalid review journal');
+      unresolved.delete(row.id); saved.pending.delete(row.id); quarantined.push(row);
+      continue;
+    }
     if (![1, 2].includes(row.version) || !unresolved.has(row.id) || !['received', 'skip'].includes(row.decision) || !Number.isSafeInteger(row.at) || row.at <= 0) throw new Error('Invalid review journal');
     // Version 2 rows fast-forward the route; older releases reject them and keep the route paused (fail closed).
     if (row.version === 2) {
@@ -48,16 +55,17 @@ async function readDelivery(directory, identity) {
     unresolved.delete(row.id); saved.pending.delete(row.id); resolutions.push(row);
   }
   return { identity, revision: createHash('sha256').update(JSON.stringify([journal, review])).digest('hex'),
-    unresolved, pending: saved.pending, resolutions, route, fastForwardAt, startedAt: saved.startedAt };
+    unresolved, pending: saved.pending, resolutions, quarantined, route, fastForwardAt, startedAt: saved.startedAt };
 }
 export function createDeliveryReviewStore(directory, { now = Date.now } = {}) {
   return {
     async list() {
-      const items = [];
+      const items = [], quarantined = [];
       for (const name of await readdir(directory)) {
         const match = /^lineport-route-([a-f0-9]{64})\.jsonl$/.exec(name);
         if (!match) continue;
         const result = await inspectDelivery(directory, match[1]);
+        for (const row of result.quarantined) quarantined.push({ identity: result.identity, id: row.id, phase: row.phase, reason: row.reason, at: new Date(row.at).toISOString(), route: result.route });
         if (!result.unresolved.size) continue;
         // A blocked route writes nothing more, so the journal's last write marks when it stopped.
         const blockedSince = new Date((await lstat(path.join(directory, name))).mtimeMs).toISOString();
@@ -65,7 +73,7 @@ export function createDeliveryReviewStore(directory, { now = Date.now } = {}) {
         for (const id of result.unresolved) items.push({ identity: result.identity, revision: result.revision, id, text: describePayload(result.pending.get(id) || ''),
           pending: result.pending.size, backlog, blockedSince, route: result.route });
       }
-      return { items };
+      return { items, quarantined: quarantined.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 50) };
     },
     async resolve(input) {
       if (!['received', 'skip'].includes(input.decision)) throw new HttpError(400, '請逐筆選擇確認收到或略過；不提供重送');

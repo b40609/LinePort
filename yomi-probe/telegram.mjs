@@ -24,6 +24,9 @@ export class TelegramUnsent extends RelayError {
   }
 }
 
+// Bot API descriptions that concern only the submitted message. "chat not found", missing rights
+// and similar chat-wide 400s are deliberately absent: they must pause the route, not skip messages.
+const PER_MESSAGE_REJECTION = /wrong (?:remote )?file identifier|wrong file type|file is too big|message is too long|message caption is too long|can't parse entities|text must be non-empty|message text is empty|PHOTO_INVALID_DIMENSIONS|PHOTO_SAVE_FILE_INVALID|IMAGE_PROCESS_FAILED|FILE_PARTS_INVALID|failed to get HTTP URL content|wrong type of the web page content/i;
 export function createTelegramClient(token, { request = fetch } = {}) {
   if (typeof token !== 'string' || !/^\d{4,20}:[a-zA-Z0-9_-]{20,100}$/.test(token)) throw new RelayError('請設定有效的 Telegram Bot Token');
   async function call(method, data = {}, file) {
@@ -46,8 +49,11 @@ export function createTelegramClient(token, { request = fetch } = {}) {
           && result.parameters.retry_after <= 2147483) throw new TelegramRateLimit(result.parameters.retry_after);
         const messages = { 401: 'Telegram Token 無效', 403: 'Telegram Bot 沒有讀取或發送權限', 409: 'Telegram 更新被其他程式或 webhook 占用', 413: 'Telegram 拒絕：附件超過平台上限', 429: 'Telegram 發送過於頻繁，請稍後再啟動該路線' };
         // A definite API rejection (the request was answered with an error) is never a delivery.
-        throw Object.assign(new RelayError(messages[result.error_code] || 'Telegram API 拒絕操作，請檢查聊天室 ID 與 Bot 權限'),
-          { status: Number(result.error_code || response.status) || 0, rejected: true });
+        // Only rejections about this one message (not the chat, Bot or token) are marked permanent.
+        const status = Number(result.error_code || response.status) || 0;
+        const permanent = status === 413 || status === 400 && typeof result.description === 'string' && PER_MESSAGE_REJECTION.test(result.description);
+        throw Object.assign(new RelayError(permanent ? 'Telegram 拒絕此則內容（格式、長度或附件不被接受）' : messages[result.error_code] || 'Telegram API 拒絕操作，請檢查聊天室 ID 與 Bot 權限'),
+          { status, rejected: true, permanent });
       }
       return result.result;
     } catch (error) {
@@ -75,7 +81,7 @@ export function createTelegramClient(token, { request = fetch } = {}) {
     async downloadMedia(value) {
       const payload = mediaPayload(value);
       if (payload.source === 'line') throw new RelayError('附件來源不是 Telegram，尚未發送；請停止並核對規則');
-      if (payload.fileSize > TELEGRAM_DOWNLOAD_LIMIT) throw new RelayError('Telegram 附件超過 Bot 20 MB 下載上限，尚未呼叫目的發送；請至來源查看');
+      if (payload.fileSize > TELEGRAM_DOWNLOAD_LIMIT) throw Object.assign(new RelayError('Telegram 附件超過 Bot 20 MB 下載上限，尚未呼叫目的發送；請至來源查看'), { permanent: true });
       let reader;
       try {
         const file = await call('getFile', { file_id: payload.fileId });
@@ -99,12 +105,14 @@ export function createTelegramClient(token, { request = fetch } = {}) {
         const bytes = Buffer.concat(chunks, length);
         if (payload.kind === 'photo') {
           const fileName = imageFileName(bytes);
-          if (!['image.jpg', 'image.png'].includes(fileName)) throw new Error('Unsupported image format');
+          if (!['image.jpg', 'image.png'].includes(fileName)) throw Object.assign(new Error('Unsupported image format'), { permanent: true });
           return { bytes, fileName };
         }
         return { bytes, fileName: safeFileName(payload.fileName, 'file.bin') };
-      } catch {
-        throw new RelayError('Telegram 附件下載或格式驗證失敗，尚未呼叫目的發送；待送紀錄已保留，請檢查來源附件與連線後停止並重新啟動');
+      } catch (error) {
+        // Over-size and unsupported formats will never succeed; network failures may.
+        throw Object.assign(new RelayError('Telegram 附件下載或格式驗證失敗，尚未呼叫目的發送；待送紀錄已保留，請檢查來源附件與連線後停止並重新啟動'),
+          { permanent: error?.permanent === true || error?.message === 'Download too large' });
       } finally { if (reader) { try { await reader.cancel(); } catch {} reader.releaseLock(); } }
     },
     async send(id, text, { replyTo, threadId, prepared } = {}) {

@@ -43,7 +43,7 @@ export async function downloadLineMedia(service, value, { load = yomiMedia } = {
   const payload = mediaPayload(value);
   if (payload.source !== 'line') throw new RelayError('附件來源不是 LINE，尚未發送；請停止並核對規則');
   const cap = MEDIA_LIMITS[payload.kind];
-  if (payload.fileSize > cap) throw new RelayError(`LINE 附件超過 ${cap / 1000000} MB 上限，尚未發送；請至來源查看`);
+  if (payload.fileSize > cap) throw Object.assign(new RelayError(`LINE 附件超過 ${cap / 1000000} MB 上限，尚未發送；請至來源查看`), { permanent: true });
   let bytes;
   try {
     const tools = await load();
@@ -54,14 +54,17 @@ export async function downloadLineMedia(service, value, { load = yomiMedia } = {
     } else {
       bytes = (await tools.downloadLegacy(service.client, { messageId: payload.messageId, preview: false }))?.bytes;
     }
-    if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > cap) throw new Error('Invalid size');
-    if (payload.kind === 'document' && payload.fileSize && bytes.length !== payload.fileSize) throw new Error('Size mismatch');
-  } catch {
-    throw new RelayError('LINE 附件下載、驗證或解密失敗，尚未呼叫目的發送；待送紀錄已保留，請確認 LINE 登入與來源附件後停止並重新啟動');
+    if (!Buffer.isBuffer(bytes) || !bytes.length) throw new Error('Empty object');
+    if (bytes.length > cap) throw Object.assign(new Error('Too large'), { permanent: true });
+    if (payload.kind === 'document' && payload.fileSize && bytes.length !== payload.fileSize) throw Object.assign(new Error('Size mismatch'), { permanent: true });
+  } catch (error) {
+    // A failed MAC check or a size that can never fit is permanent for this attachment; network errors are not.
+    throw Object.assign(new RelayError('LINE 附件下載、驗證或解密失敗，尚未呼叫目的發送；待送紀錄已保留，請確認 LINE 登入與來源附件後停止並重新啟動'),
+      { permanent: error?.permanent === true || error?.name === 'MediaMacVerificationError' });
   }
   if (payload.kind === 'photo') {
     const fileName = imageFileName(bytes);
-    if (!fileName) throw new RelayError('LINE 圖片格式無法辨識，尚未發送；待送紀錄已保留，請至來源查看');
+    if (!fileName) throw Object.assign(new RelayError('LINE 圖片格式無法辨識，尚未發送；待送紀錄已保留，請至來源查看'), { permanent: true });
     return { bytes, fileName };
   }
   return { bytes, fileName: safeFileName(payload.fileName, 'file.bin') };
