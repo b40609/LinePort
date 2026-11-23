@@ -3,7 +3,7 @@ import { readFile, open, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { HttpError } from './local-http.mjs';
 import { normalizeOptions, senderMatches, inSchedule } from './rule-options.mjs';
-import { mediaPayload } from './media-payload.mjs';
+import { mediaPayload, mediaNotice, CAPTION_LIMIT } from './media-payload.mjs';
 import { RelayError } from './relay-health.mjs';
 import { discordId } from './discord.mjs';
 import { botCredentials } from './bot-credentials.mjs';
@@ -101,9 +101,13 @@ export function matchingText(rule, message, sourceKey, sourceEndpoint) {
 export function matchingContent(rule, message, sourceKey, sourceEndpoint) {
   if (!message.media || !rule.media) return matchingText(rule, message, sourceKey, sourceEndpoint);
   if (textRejection(rule, message, sourceKey, true) !== null) return null;
-  const caption = renderMessageText({ template: rule.template, prefix: rule.prefix, message, source: sourceEndpoint, rule });
+  let caption = renderMessageText({ template: rule.template, prefix: rule.prefix, message, source: sourceEndpoint, rule });
+  if (caption.length > CAPTION_LIMIT) caption = caption.slice(0, CAPTION_LIMIT - 12) + '…（說明過長已截斷）';
+  // An attachment that cannot be transferred (too large or unknown format) becomes a visible notice
+  // instead of pausing the whole route; nothing is silently dropped.
+  if (message.media.kind === 'unsupported') return mediaNotice({ ...message.media, kind: 'document', caption }, '超過大小上限或格式不支援');
   try { return mediaPayload({ ...message.media, caption }); }
-  catch { throw new RelayError('圖片／檔案格式、大小或說明不符限制，已暫停此路線；請核對 10／50 MB 大小及 1,024 字元說明，保留原訊息後調整規則'); }
+  catch { throw new RelayError('附件資料格式不符限制，已暫停此路線；請保留原訊息並回報此狀態'); }
 }
 export async function atomicJson(file, value) {
   // Retain the previous file if the write fails; never truncate an active configuration.

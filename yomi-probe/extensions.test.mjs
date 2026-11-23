@@ -75,9 +75,9 @@ test('Discord missing acknowledgement remains blocked after restart without a se
   const restarted = await createMultiRelay(options); await restarted.tick(); assert.equal(sends, 1); assert.equal(restarted.state.routes[0].phase, 'blocked');
 });
 
-test('Discord source and media rules reject, and preview reflects the 2000 character limit', () => {
+test('Discord source rules reject, Discord media destinations are accepted, and preview reflects the 2000 character limit', () => {
   assert.throws(() => config({ sources: [endpoint('discord', channel)], destinations: [endpoint('line', 'cdest')] }));
-  assert.throws(() => config({ media: true }));
+  assert.equal(config({ media: true }).rules[0].media, true);
   const result = previewRules({ config: config(), source: 'line:csource', text: 'a'.repeat(2001) });
   assert.equal(result.results[0].destinations[0].eligible, false);
 });

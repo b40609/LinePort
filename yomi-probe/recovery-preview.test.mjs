@@ -47,12 +47,15 @@ test('media preview matches queued payload filters and includes prefix without a
 test('media preview distinguishes no-caption attachment, disabled media and size/caption failures', () => {
   const input = { config: config({ media: true }), source: 'telegram:-1', text: '', media: { kind: 'photo', fileSize: 10000000 } };
   assert.equal(previewRules(input).results[0].destinations[0].eligible, true);
-  for (const fileSize of [0, -1, 10000001]) assert.match(previewRules({ ...input, media: { kind: 'photo', fileSize } }).results[0].destinations[0].reason, /格式、大小或說明/);
+  assert.throws(() => previewRules({ ...input, media: { kind: 'photo', fileSize: -1 } }));
+  assert.match(previewRules({ ...input, media: { kind: 'photo', fileSize: 0 } }).results[0].summary, /大小未知/);
   assert.equal(previewRules({ ...input, media: { kind: 'document', fileSize: 50000000 } }).results[0].destinations[0].eligible, true);
-  assert.equal(previewRules({ ...input, media: { kind: 'document', fileSize: 50000001 } }).results[0].destinations[0].eligible, false);
-  assert.equal(previewRules({ ...input, text: 'x'.repeat(1025) }).results[0].destinations[0].eligible, false);
-  const rejected = previewRules({ ...input, reply: true, media: { kind: 'photo', fileSize: 10000001 } }).results[0];
-  assert.match(rejected.destinations[0].reason, /實際運作時會暫停/); assert.equal(rejected.replyReason, '');
+  // Over-limit attachments are announced as a text notice instead of pausing the route.
+  const over = previewRules({ ...input, media: { kind: 'document', fileSize: 50000001 } }).results[0];
+  assert.equal(over.contentKind, 'text'); assert.match(over.text, /附件未轉送/);
+  // Captions over Telegram's 1,024 limit follow the attachment as separate messages.
+  assert.equal(previewRules({ ...input, text: 'x'.repeat(1025) }).results[0].destinations[0].eligible, true);
+  assert.match(previewRules({ ...input, reply: true, media: { kind: 'photo', fileSize: 10000001 } }).results[0].text, /附件未轉送/);
   const disabled = previewRules({ ...input, config: config(), text: '通知' }).results[0];
   assert.equal(disabled.contentKind, 'text'); assert.match(disabled.summary, /不含附件/);
   assert.equal(previewRules({ ...input, config: config() }).results[0].destinations[0].eligible, false);

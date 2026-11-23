@@ -10,6 +10,7 @@ import { guardLineSession } from './line-e2ee-state.mjs';
 import { inspectRelayRead, requireRelayEncryption } from './relay-health.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
 import { runMultiRelay } from './multi-relay.mjs';
+import { normalizeLineMessage } from './line-media.mjs';
 for (const key of ['log', 'warn', 'error', 'debug', 'info', 'trace']) console[key] = () => {};
 const state = { app: 'line-relay-bridge', version: 2, pid: process.pid, phase: 'starting', source: process.env.LINECALL_SOURCE || '來源1', destination: process.env.LINECALL_DESTINATION || '目的2', intervalSeconds: 3, retrySeconds: 0, consecutiveErrors: 0, startedAt: null, polls: 0, forwarded: 0, uncertain: 0, errors: 0, lastPoll: null, stage: 'start' };
 if (process.env.LINEPORT_CONFIG_REVISION) Object.assign(state, { version: 3, revision: process.env.LINEPORT_CONFIG_REVISION });
@@ -75,7 +76,8 @@ let startedAt = saved.startedAt;
   async function poll() {
     try {
       state.stage = 'read';
-      const messages = await service.getRecentMessages(source, 50);
+      // Media and non-text messages carry JSON in `text` after E2EE decrypt; never forward it.
+      const messages = (await service.getRecentMessages(source, 50)).map(message => normalizeLineMessage(message, source));
       if (service.loginRequired) { state.stage = 'login_required'; throw new Error('Login required'); }
       state.polls++; state.lastPoll = new Date().toISOString();
       state.lastRead = inspectRelayRead(messages, seen, startedAt);

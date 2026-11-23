@@ -117,14 +117,14 @@ test('backlog exceeds bounded queues without losing messages or dedup evidence',
   assert.equal(relay.state.routes[0].pending, 0);
 });
 const media = { kind: 'photo', fileId: 'SYNTHETIC_FILE_ID', fileSize: 1024, caption: '' };
-test('media is opt-in, only Telegram to Telegram, bounded and sender-filtered', () => {
-  assert.throws(() => rule({ media: true }));
+test('media is opt-in, bounded and sender-filtered; unsupported attachments become notices', () => {
+  assert.equal(rule({ media: true }).media, true);
   const value = rule({ sources: [endpoint('-1', 'telegram')], destinations: [endpoint('-2', 'telegram')], media: true, prefix: '[通知] ', senderAllowlist: { 'telegram:-1': ['123'] } });
   assert.equal(matchingContent(value, { ...message('a', '', '456'), media }, 'telegram:-1'), null);
   assert.equal(matchingContent(value, { ...message('a', '', '123'), media }, 'telegram:-1').caption, '[通知] ');
   assert.throws(() => matchingContent(value, { ...message('a', '', '123'), media: { ...media, fileSize: 11 * 1024 * 1024 } }, 'telegram:-1'));
   assert.throws(() => matchingContent(value, { ...message('a', '', '123'), media: { ...media, fileSize: 10000001 } }, 'telegram:-1'));
-  assert.throws(() => matchingContent(value, { ...message('a', '', '123'), media: { kind: 'unsupported' } }, 'telegram:-1'));
+  assert.match(matchingContent(value, { ...message('a', '', '123'), media: { kind: 'unsupported', fileSize: 60000000, fileName: 'big.zip' } }, 'telegram:-1'), /附件未轉送：.*big\.zip.*60\.0 MB/);
 });
 test('Telegram media uses Bot file IDs and validates acknowledgements without download URLs', async () => {
   const calls = [], client = createTelegramClient('12345:SYNTHETIC_TOKEN_1234567890', { request: async (url, options) => {
@@ -144,7 +144,12 @@ test('media queue survives offline restart and refuses corrupt or future payload
   telegram.read = async () => { throw new Error('synthetic offline'); };
   const restarted = await createMultiRelay(options); await restarted.tick();
   assert.deepEqual(telegram.calls[0][1], media);
-  assert.throws(() => parseJournal(JSON.stringify({ id: 'a', outcome: 'media_queued', payloadVersion: 2, payload: media }) + '\n'));
+  assert.throws(() => parseJournal(JSON.stringify({ id: 'a', outcome: 'media_queued', payloadVersion: 3, payload: media }) + '\n'));
+  // Version 1 never carries version 2 fields; version 2 accepts them and older rows still parse.
+  const base = JSON.stringify({ startedAt: 1, baseline: [] }) + '\n', named = { ...media, kind: 'document', fileName: 'report.pdf' };
+  assert.throws(() => parseJournal(base + JSON.stringify({ id: 'a', outcome: 'media_queued', payloadVersion: 1, payload: named }) + '\n'));
+  assert.deepEqual(parseJournal(base + JSON.stringify({ id: 'a', outcome: 'media_queued', payloadVersion: 2, payload: named }) + '\n').pending.get('a'), named);
+  assert.deepEqual(parseJournal(base + JSON.stringify({ id: 'a', outcome: 'media_queued', payloadVersion: 1, payload: media }) + '\n').pending.get('a'), media);
 });
 test('anonymous Telegram administrators use sender_chat identity, never pseudo-user attribution', () => {
   const value = telegramMessage({ message: { chat: { id: -1 }, message_id: 1, date: 1, sender_chat: { id: -1 }, from: { id: 123, is_bot: true }, text: '通知' } });

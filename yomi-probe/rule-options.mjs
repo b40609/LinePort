@@ -32,8 +32,8 @@ export function normalizeOptions(rule, sources, destinations) {
     schedule = { timezone: 'Asia/Taipei', days: [...new Set(value.days)].sort(), start: value.start, end: value.end, outside: value.outside };
   }
   if (rule.media !== undefined && typeof rule.media !== 'boolean') invalid('圖片與檔案設定需為開啟或關閉');
-  if (rule.media && (sources.some(value => value.platform !== 'telegram') || destinations.some(value => !['telegram', 'line'].includes(value.platform)))) invalid('附件需使用 Telegram 來源；可送往 Telegram，圖片另可送往 LINE。LINE 來源與 Discord 媒體尚未支援');
-  if (rule.media && rule.replies && destinations.some(value => value.platform === 'line')) invalid('Telegram → LINE 圖片目前不能保留回覆關聯，請關閉回覆或拆分規則');
+  if (rule.media && (sources.some(value => !['telegram', 'line'].includes(value.platform)) || destinations.some(value => !['telegram', 'line', 'discord'].includes(value.platform)))) invalid('附件需使用 LINE 或 Telegram 來源，目的可選 LINE、Telegram 或 Discord');
+  if (rule.media && rule.replies && destinations.some(value => value.platform === 'line')) invalid('送往 LINE 的圖片／檔案目前不能保留回覆關聯，請關閉回覆或拆分規則');
   if (rule.replies !== undefined && typeof rule.replies !== 'boolean') invalid('回覆關聯設定需為開啟或關閉');
   return { senderAllowlist, ...(Object.keys(senderAliases).length ? { senderAliases } : {}), schedule, media: rule.media === true, replies: rule.replies === true };
 }

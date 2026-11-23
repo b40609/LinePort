@@ -13,7 +13,8 @@ import { inspectDelivery } from './delivery-review.mjs';
 import { inSchedule } from './rule-options.mjs';
 import { readJournalFile, storageHealth } from './storage-health.mjs';
 import { sourceReply, destinationReply } from './reply-links.mjs';
-import { sendLinePhoto } from './line-media.mjs';
+import { sendLineMedia, downloadLineMedia, normalizeLineMessage } from './line-media.mjs';
+import { mediaRejection, mediaNotice, payloadVersion, needsDownload } from './media-payload.mjs';
 import { splitTextChunks } from './text-chunk.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -203,12 +204,15 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
           if (text === null) {
             await edge.record({ id, outcome: 'baseline' }); edge.seen.add(id); edge.status.skipped++; continue;
           }
-          if (edge.destination.platform === 'discord' && typeof text !== 'string') throw new RelayError('Discord 目的只支援純文字發送；請關閉媒體或改選其他目的');
+          let content = text;
+          // Attachments that provably exceed this destination's limits become a visible notice instead.
+          const rejection = mediaRejection(text, edge.destination.platform);
+          if (rejection) content = mediaNotice(text, rejection);
           const parent = edge.rule.replies ? sourceReply(message, edge.source.platform, edge.source.id) : null;
           const reply = parent ? { replyVersion: 1, replyTo: parent } : {};
-          await edge.record(typeof text === 'string' ? { id, outcome: 'queued', text, ...reply } : { id, outcome: 'media_queued', payloadVersion: 1, payload: text, ...reply });
+          await edge.record(typeof content === 'string' ? { id, outcome: 'queued', text: content, ...reply } : { id, outcome: 'media_queued', payloadVersion: payloadVersion(content), payload: content, ...reply });
           if (parent) edge.replies.set(id, parent);
-          edge.pending.set(id, text); edge.seen.add(id);
+          edge.pending.set(id, content); edge.seen.add(id);
         }
       } catch (error) {
         edge.status.phase = 'failed'; edge.status.errors++;
@@ -242,8 +246,10 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             if (attempted) await pause(1100);
             if (cooldowns.get(edge.destination.platform) > now() || !inSchedule(edge.rule.schedule, now())) break;
             status.stage = 'prepare';
+            // Attachments may take longer to download and upload than a text message.
+            const deadline = typeof text === 'string' ? operationTimeoutMs : operationTimeoutMs * 4;
             const prepared = adapters[edge.destination.platform].preparePayload
-              ? await withDeadline(adapters[edge.destination.platform].preparePayload(text), operationTimeoutMs) : undefined;
+              ? await withDeadline(adapters[edge.destination.platform].preparePayload(text), deadline) : undefined;
             status.stage = 'journal';
             await edge.record({ id, outcome: 'sending' }); edge.seen.add(id);
             status.stage = 'send';
@@ -267,7 +273,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
                   ...(prepared ? { ...(i === 0 ? { prepared } : {}), signal: controller.signal } : {}),
                   ...(currentReply ? { replyTo: currentReply } : {}),
                   ...(edge.destination.threadId !== undefined ? { threadId: edge.destination.threadId } : {})
-                }), operationTimeoutMs, () => controller.abort());
+                }), deadline, () => controller.abort());
                 if (!sendResult?.id) throw new Error('Missing acknowledgement');
                 deliveredChunks++;
                 if (!firstResult) firstResult = sendResult;
@@ -335,7 +341,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
   return { state, tick, sourceKeys: [...sources.keys()] };
 }
 
-export async function createLineRelayAdapter(service, endpoints, { downloadPhoto } = {}) {
+export async function createLineRelayAdapter(service, endpoints, { downloadPhoto, downloadMedia = downloadPhoto } = {}) {
   service.on('error', () => {});
   if (!await service.resumeSession()) throw new RelayError('LINE 登入已失效，請先重新授權');
   requireRelayEncryption(service);
@@ -350,6 +356,11 @@ export async function createLineRelayAdapter(service, endpoints, { downloadPhoto
   };
   const protection = new Map();
   const scans = new Map();
+  // Classify media and non-text messages before any matching, paging or journaling sees them.
+  const reader = {
+    getRecentMessages: async (id, count) => (await service.getRecentMessages(id, count)).map(message => normalizeLineMessage(message, id)),
+    getPreviousMessages: async (id, count, before) => (await service.getPreviousMessages(id, count, before)).map(message => normalizeLineMessage(message, id)),
+  };
   return {
     identity: `line:${service.profile.mid}`,
     async prepare(id) {
@@ -357,12 +368,12 @@ export async function createLineRelayAdapter(service, endpoints, { downloadPhoto
       const mode = await prepareRelayDestination(service, id);
       protection.set(id, mode); return mode;
     },
-    async recent(id) { check(id); return service.getRecentMessages(id, 50); },
+    async recent(id) { check(id); return (await service.getRecentMessages(id, 50)).map(message => normalizeLineMessage(message, id)); },
     async read(id, time, known) {
       check(id);
       if (!scans.has(id)) scans.set(id, { messages: new Map() });
       try {
-        const messages = await readLineSince(service, id, time, known, { progress: scans.get(id) });
+        const messages = await readLineSince(reader, id, time, known, { progress: scans.get(id) });
         if (messages !== null) scans.delete(id);
         return messages;
       } catch (error) {
@@ -370,14 +381,15 @@ export async function createLineRelayAdapter(service, endpoints, { downloadPhoto
         throw error;
       }
     },
-    preparePayload: text => typeof text === 'string' ? undefined : downloadPhoto
-      ? downloadPhoto(text) : Promise.reject(new RelayError('Telegram 圖片來源未連結，待送已保留；請重新連結平台')),
+    downloadMedia: payload => downloadLineMedia(service, payload),
+    preparePayload: text => typeof text === 'string' ? undefined : text.source === 'line' ? downloadLineMedia(service, text) : downloadMedia
+      ? downloadMedia(text) : Promise.reject(new RelayError('Telegram 附件來源未連結，待送已保留；請重新連結平台')),
     send(id, text, options = {}) {
       check(id);
       if (!protection.has(id)) throw new RelayError('目的聊天室尚未完成準備，請停止後重新啟動轉送');
       if (typeof text === 'string') return sendRelayText(service, id, text, { ...options, transportOnly: protection.get(id) === 'transport' });
-      if (protection.get(id) === 'transport') throw new RelayError('Bot 群組相容模式目前僅支援文字');
-      return sendLinePhoto(service, id, text, options.prepared, options);
+      if (protection.get(id) === 'transport') throw new RelayError('Bot 群組相容模式目前僅支援文字；請關閉此規則的圖片／檔案，或另建純文字規則');
+      return sendLineMedia(service, id, text, options.prepared, options);
     },
   };
 }
@@ -388,16 +400,20 @@ export async function runMultiRelay(state, directory, { createLineService }) {
   const endpoints = config.rules.filter(rule => rule.enabled).flatMap(rule => [...rule.sources, ...rule.destinations]);
   const adapters = {}, platformErrors = {};
   let telegramMediaClient;
+  // Attachments are fetched from the platform that received them, only when a destination needs bytes.
+  const downloadMedia = payload => payload.source === 'line'
+    ? adapters.line?.downloadMedia ? adapters.line.downloadMedia(payload) : Promise.reject(new RelayError('LINE 附件來源未連結，待送已保留；請重新授權 LINE'))
+    : telegramMediaClient ? telegramMediaClient.downloadMedia(payload) : Promise.reject(new RelayError('Telegram 附件來源未連結，待送已保留；請重新連結平台'));
   if (endpoints.some(endpoint => endpoint.platform === 'discord')) {
     try {
       const client = createDiscordClient(await store.discordToken()), me = await client.getMe();
-      adapters.discord = { identity: `discord:${me.id}`, prepare: id => client.getChannel(id), send: (id, text, options) => client.send(id, text, options) };
+      adapters.discord = { identity: `discord:${me.id}`, prepare: id => client.getChannel(id), send: (id, text, options) => client.send(id, text, options),
+        preparePayload: text => needsDownload(text, 'discord') ? downloadMedia(text) : undefined };
     } catch (error) { platformErrors.discord = error instanceof RelayError ? error.message : 'Discord 連結失敗；請檢查 Bot 與目的頻道權限'; }
   }
   if (endpoints.some(endpoint => endpoint.platform === 'line')) {
     try {
-      adapters.line = await createLineRelayAdapter(await createLineService(), endpoints, { downloadPhoto: text => telegramMediaClient
-        ? telegramMediaClient.downloadPhoto(text) : Promise.reject(new RelayError('Telegram 圖片來源未連結，待送已保留；請重新連結平台')) });
+      adapters.line = await createLineRelayAdapter(await createLineService(), endpoints, { downloadMedia });
     } catch (error) { platformErrors.line = error instanceof RelayError ? error.message : 'LINE 連結失敗，請檢查登入、好友列表與 E2EE 金鑰'; }
   }
   if (endpoints.some(endpoint => endpoint.platform === 'telegram')) {
@@ -421,6 +437,7 @@ export async function runMultiRelay(state, directory, { createLineService }) {
         },
         async read(id) { if (pollError) throw new RelayError(pollError); return inbox.messages(id); },
         health: () => ({ polls, lastPoll, ...inbox.health() }),
+        preparePayload: text => needsDownload(text, 'telegram') ? downloadMedia(text) : undefined,
         send: (id, text, options) => client.send(id, text, options),
       };
       if (sourceIds.length) {

@@ -1,6 +1,6 @@
 import { open } from 'node:fs/promises';
 import { unseenText } from './relay-rules.mjs';
-import { mediaPayload } from './media-payload.mjs';
+import { journalPayload } from './media-payload.mjs';
 import { assertWritable, readJournalFile } from './storage-health.mjs';
 import { validMessageId } from './reply-links.mjs';
 
@@ -42,8 +42,8 @@ export function parseJournal(text) {
       if (!result.pending.has(row.id) || !Number.isSafeInteger(row.retryAt) || row.retryAt <= 0) throw new Error('Invalid retry');
       result.retryAt = Math.max(result.retryAt, row.retryAt);
     } else if (typeof row.id === 'string' && row.id && row.outcome === 'media_queued') {
-      if (row.payloadVersion !== 1 || result.seen.has(row.id)) throw new Error('Invalid queued media');
-      result.pending.set(row.id, mediaPayload(row.payload));
+      if (![1, 2].includes(row.payloadVersion) || result.seen.has(row.id)) throw new Error('Invalid queued media');
+      result.pending.set(row.id, journalPayload(row.payloadVersion, row.payload));
       result.seen.add(row.id);
     } else if (typeof row.id === 'string' && row.id && row.outcome === 'queued') {
       if (typeof row.text !== 'string' || !row.text || result.seen.has(row.id)) throw new Error('Invalid queued message');

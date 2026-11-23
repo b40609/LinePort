@@ -159,7 +159,8 @@ test('mixed destinations preview explicitly reports caption only and rejects med
   const blank = previewRules({ config, source: 'telegram:-1001', sender: '123', text: '', timestamp: 1100,
     media: { kind: 'photo', fileSize: 1000000 } }).results[0];
   assert.ok(blank.destinations.every(row => !row.eligible));
-  assert.throws(() => normalizeConfig({ ...config, rules: config.rules.map(rule => ({ ...rule, media: true })) }), /Telegram 來源/);
+  // LINE and Telegram sources may both enable attachments now.
+  assert.ok(normalizeConfig({ ...config, rules: config.rules.map(rule => ({ ...rule, media: true })) }).rules.every(rule => rule.media));
 });
 
 test('selection coverage explains twelve pairs and media limitations without changing editor options', async () => {
@@ -172,7 +173,7 @@ test('selection coverage explains twelve pairs and media limitations without cha
   const text = vm.runInContext('coverageText(sources,destinations,false)', context);
   assert.match(text, /3 個來源 → 4 個目的，共 12 組配對/);
   assert.match(text, /圖片／檔案本身不會送達/);
-  assert.match(text, /LINE 來源圖片尚未支援/);
-  assert.match(vm.runInContext('coverageText(sources,destinations,true)', context), /LINE 來源尚未支援/);
+  assert.match(text, /LINE 圖片／檔案需開啟附件才會轉送/);
+  assert.match(vm.runInContext('coverageText(sources,destinations,true)', context), /可送往 LINE、Telegram 與 Discord/);
   assert.match(vm.runInContext('coverageText([],[],false)', context), /先選來源與目的/);
 });

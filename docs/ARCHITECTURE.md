@@ -61,7 +61,7 @@ Telegram 由獨立長輪詢讀取更新。保存選定來源可轉的文字及�
 
 每來源與待送佇列各自工作，完成後等待 3 秒；不同目的可並行，同一目的跨來源依序發送、間隔至少 1.1 秒。來源錯誤另採退避，逾時後保留尚未完成的讀取，避免重疊請求。即使所有來源斷線，已保存待送仍可處理。初始化準備有等待期限；LINE 共用連線及 Telegram 單 Bot 收件仍是平台層的共用依賴。
 
-只有 Telegram／Discord 明確有效 429 會保存 retryAt 並自動重試；保守等待該目的平台所有路線。時段外 hold 保存待送；skip 依訊息時間保存略過證據。媒體只重用同一 Telegram Bot 的 file_id，不下載原檔；目前未建立回覆 ID 對照。
+只有 Telegram／Discord 明確有效 429 會保存 retryAt 並自動重試；保守等待該目的平台所有路線。時段外 hold 保存待送；skip 依訊息時間保存略過證據。媒體轉送見下方「圖片與檔案（v1.2.0）」。
 
 Telegram 的網路例外依 `error.code`／`error.cause.code` 分類（`telegram.mjs` 的 `requestNeverSent`）：DNS 失敗、拒絕連線、網路不可達、連線逾時（`UND_ERR_CONNECT_TIMEOUT`）與 TLS／憑證錯誤代表請求從未建立連線，訊息確定未送達，改保存 `retry` 列並依 5 秒起倍增、上限 5 分鐘的等待自動重試，不鎖定路線；多次連線嘗試（happy eyeballs）只有每一次都屬於上述錯誤才算。分段長文已送出任一段後才失敗時，重試會重複前段，所以仍視為結果不明。請求逾時、`AbortError`、`ECONNRESET`、`UND_ERR_SOCKET`、`EPIPE`、未知錯誤或缺少回應 ID 均視為結果不明，保存 uncertain，暫停該配對。若重啟發現 sending 未完成或 uncertain，保持 blocked，不自動重試；其他配對可繼續。任何必要紀錄寫入失敗也停止相關配對。
 
@@ -85,13 +85,23 @@ Windows 本機通知（`windows-notify.mjs`）改用原生 Toast（會留在通�
 
 **看門狗**（`watchdog.ps1`，由 `install-watchdog.ps1` 安裝成排程工作 `LinePort-Service-Recovery`：登入時與每 5 分鐘執行）讀取 `autostart.json` 與 `relay-intent.json`（頁面開始／停止轉送時記錄的使用者意圖）。服務無回應且啟用服務自動啟動時，執行 `autostart-service.ps1`；轉送應在執行（自動轉送開啟、使用者沒有手動停止）但程序不存在（phase 為 stopped／unavailable）時，執行 `autostart-relay.ps1`。failed／blocked 需要人工核對，看門狗不處理。15 分鐘內最多自動拉起 3 次，超過即停手並只記一次；紀錄寫入 `watchdog.log`（保留最近 500 行）。診斷 API 需要頁面的一次性 Token，看門狗與既有自動轉送腳本一樣從本機首頁取得，Token 不寫入任何檔案。
 
+## 圖片與檔案（v1.2.0）
+
+規則開啟「圖片／檔案」後，LINE 與 Telegram 來源的圖片和檔案可送往 LINE、Telegram 與 Discord。待送紀錄只存**參照**，不存位元組：Telegram 存同一 Bot 的 `file_id`（加上選填的檔名、0 代表大小未知）；LINE 存訊息 ID 與 OBS 物件參照（`oid`、`sid`，E2EE 附件另含該附件的 `keyMaterial`）。新欄位寫成 `payloadVersion: 2`；舊版能讀的形狀（Telegram、大小已知、無檔名、說明不超過 1,024 字元）仍寫 `payloadVersion: 1`，所以舊紀錄照常讀取，降版時也盡量可讀。
+
+LINE 訊息先依 `contentType` 分類（`line-media.mjs` 的 `normalizeLineMessage`）：0 是文字；1 圖片、14 檔案轉成附件參照、文字清空；其他類型（貼圖、位置、通話、影音等）文字一律清空不轉送。原因是 E2EE 圖片／檔案解密後 `text` 是含 `keyMaterial` 與檔名的 JSON，**v1.1.0 以前會被當成一般文字轉出去**；此修正同時套用到多路線與舊版單路線（`relay.mjs`）。
+
+發送時才下載，只在記憶體驗證：Telegram 經 `getFile` 串流下載（不跟隨轉址、路徑白名單、宣告大小比對、上限 20 MB，這是 Bot API 的下載上限）；LINE 經 Yomi 的 OBS 下載，E2EE 附件先驗 MAC 再 AES-CTR 解密，舊式非 E2EE 附件走 `/r/talk/m/{id}`。圖片驗檔頭（JPEG、PNG、GIF、WebP）；檔名用 `safeFileName` 清成單一路徑片段（去控制字元、`<>:"/\|?*`、雙向控制字元、Windows 保留名，最長 120 字並保留副檔名）。目的端：Telegram 同 Bot 直接引用 `file_id`，LINE 來源則以 multipart `sendPhoto`／`sendDocument` 上傳；LINE 目的 JPEG／PNG 用 `sendImage`，其他圖片與所有檔案用 E2EE `sendFile`，說明另送；Discord 以 multipart（`payload_json` + `files[0]`）上傳，關閉所有提及。說明超過 Telegram 1,024 或 Discord 2,000 字元時，附件不帶說明、說明分段另送。附件已被接受而後續說明失敗時，整筆標為結果不明，不重送。
+
+大小上限：圖片 10 MB、檔案 50 MB（十進位）；Discord 目的 10 MB；Telegram 來源送往 LINE／Discord 受 20 MB 下載上限。**入列時**已可確定超過目的上限（或來源回報格式不支援、超過 50 MB）的附件，改存一則「附件未轉送：檔名 · 大小；原因」文字通知，不暫停整條路線。大小未知的附件在下載時才檢查，超過即在發送前失敗（待送保留、未呼叫目的）。附件的下載與上傳逾時是文字的 4 倍。Bot 群組相容模式仍只支援文字。
+
 ## 保存與限制
 
 規則與 Bot 設定採寫入臨時檔、fsync、原子更名。配對、輸出、收訊及逐筆人工決策使用追加 JSONL；載入拒絕損壞、不完整末行與未知媒體版本。人工確認收到／略過不重送、不改原檔。Windows 資料目錄只授權目前使用者與 SYSTEM；Bot Token 可選 CurrentUser DPAPI，舊明文副本、LINE 登入／E2EE 及訊息仍未加密。
 
 配對紀錄保存篩選後的待送文字；Telegram 收件另保存選定來源內容。紀錄及去重集合持續增長，以單檔 16 MiB、已知紀錄合計 256 MiB 及磁碟可用空間做保守預檢。私人封存複製已知紀錄並驗證 SHA-256，不刪原檔、不釋放容量、不含憑證，也不是完整備份。尚無安全壓縮、多程序交易保護與完整送達保證。請勿啟動多份相同資料目錄的登入／轉送流程。
 
-新增模組：rule-options（作者／時段）、media-payload（媒體驗證）、source-senders（近期人員）、storage-health（容量／私人封存）、bot-credentials／dpapi（選用憑證保護）、discord（官方目的）。[研究與儲存介面評估](RESEARCH-0.6.0.md)
+新增模組：rule-options（作者／時段）、media-payload（媒體參照、版本、上限與檔名清洗）、line-media（LINE 訊息分類、附件下載與發送）、network-errors（Telegram／Discord 共用的「確定未送出」判斷）、source-senders（近期人員）、storage-health（容量／私人封存）、bot-credentials／dpapi（選用憑證保護）、discord（官方目的）。[研究與儲存介面評估](RESEARCH-0.6.0.md)
 
 成功數表示平台回應與本機結果保存成功，不是接收者已讀，也未逐則讀回驗證。[安全說明](../SECURITY.md) · [驗證紀錄](../yomi-probe/VERIFICATION.md)
 

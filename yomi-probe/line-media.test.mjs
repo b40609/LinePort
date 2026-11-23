@@ -33,8 +33,8 @@ test('photo download validates bounded stream, size, paths and JPEG/PNG signatur
     { metadata: { file_id: photo.fileId, file_size: 5, file_path: 'photos/test.jpg' } },
     { metadata: { file_id: photo.fileId, file_size: 4, file_path: 'https://evil.test/x' } },
     { body: bytes.subarray(0,3) }, { body: Buffer.concat([bytes,bytes]) }, { body: Buffer.from('HTML') }, { status: 302 }, { fail: true },
-  ]) await assert.rejects(client(options).value.downloadPhoto(photo), error => /尚未呼叫 LINE/.test(error.message) && !error.message.includes('SYNTHETIC_TOKEN'));
-  await assert.rejects(client().value.downloadPhoto({ ...photo, kind: 'document' }), /只支援圖片/);
+  ]) await assert.rejects(client(options).value.downloadPhoto(photo), error => /尚未呼叫目的/.test(error.message) && !error.message.includes('SYNTHETIC_TOKEN'));
+  await assert.rejects(client().value.downloadPhoto({ ...photo, kind: 'document' }), /只接受圖片/);
 });
 test('public LINE image API separately confirms caption and reports both output IDs', async () => {
   const calls = [], service = { sendImage: async (...args) => { calls.push(args); return { messageId: '123' }; },
@@ -84,10 +84,12 @@ test('late image acknowledgement after deadline never starts caption or retries 
   assert.deepEqual([...f.calls].sort(), ['image', 'tg']);
 });
 
-test('preview allows photos but rejects LINE documents and unsupported reply association', () => {
+test('preview allows photos and LINE documents but rejects unsupported reply association', () => {
   const value=config(), input={config:value,source:'telegram:-1',text:'通知',media:{kind:'photo',fileSize:4}};
   assert.ok(previewRules(input).results[0].destinations.every(row=>row.eligible));
   const documents=previewRules({...input,media:{kind:'document',fileSize:4}}).results[0].destinations;
-  assert.equal(documents[0].eligible,false);assert.match(documents[0].reason,/保留待送/);assert.equal(documents[1].eligible,true);
+  assert.equal(documents[0].eligible,true);assert.match(documents[0].reason,/檔案/);assert.equal(documents[1].eligible,true);
+  const large=previewRules({...input,media:{kind:'document',fileSize:30000000}}).results[0].destinations;
+  assert.match(large[0].reason,/20 MB 下載上限/);assert.match(large[1].reason,/直接引用/);
   value.rules[0].replies=true;assert.throws(()=>normalizeConfig(value),/關閉回覆/);
 });
