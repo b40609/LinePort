@@ -81,6 +81,8 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       const reviewed = await inspectDelivery(directory, identity);
       const unresolved = reviewed.unresolved;
       edge.pending = reviewed.pending;
+      // A manual fast-forward treats everything before the decision as history for this route.
+      if (reviewed.fastForwardAt > edge.startedAt) { edge.startedAt = reviewed.fastForwardAt; status.fastForwardAt = new Date(reviewed.fastForwardAt).toISOString(); }
       status.pending = edge.pending.size;
       if (unresolved.size) {
         status.phase = 'blocked'; status.stage = 'send_uncertain'; status.uncertain = unresolved.size; status.uncertainIds = [...unresolved].slice(0, 5);

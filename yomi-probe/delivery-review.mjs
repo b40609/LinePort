@@ -35,15 +35,22 @@ async function readDelivery(directory, identity) {
   const review = await readOptional(path.join(directory, `lineport-review-${identity}.jsonl`));
   if (review && !review.endsWith('\n')) throw new Error('Incomplete review journal');
   const resolutions = [];
+  let fastForwardAt = 0;
   for (const line of review.split('\n').filter(Boolean)) {
     const row = JSON.parse(line);
-    if (row.version !== 1 || !unresolved.has(row.id) || !['received', 'skip'].includes(row.decision) || !Number.isSafeInteger(row.at) || row.at <= 0) throw new Error('Invalid review journal');
+    if (![1, 2].includes(row.version) || !unresolved.has(row.id) || !['received', 'skip'].includes(row.decision) || !Number.isSafeInteger(row.at) || row.at <= 0) throw new Error('Invalid review journal');
+    // Version 2 rows fast-forward the route; older releases reject them and keep the route paused (fail closed).
+    if (row.version === 2) {
+      if (row.fastForward !== true || row.decision !== 'received' || !Array.isArray(row.dropped) || row.dropped.length > 100000 || row.dropped.some(id => typeof id !== 'string')) throw new Error('Invalid review journal');
+      for (const id of row.dropped) saved.pending.delete(id);
+      fastForwardAt = Math.max(fastForwardAt, row.at);
+    } else if ('fastForward' in row || 'dropped' in row) throw new Error('Invalid review journal');
     unresolved.delete(row.id); saved.pending.delete(row.id); resolutions.push(row);
   }
   return { identity, revision: createHash('sha256').update(JSON.stringify([journal, review])).digest('hex'),
-    unresolved, pending: saved.pending, resolutions, route };
+    unresolved, pending: saved.pending, resolutions, route, fastForwardAt, startedAt: saved.startedAt };
 }
-export function createDeliveryReviewStore(directory) {
+export function createDeliveryReviewStore(directory, { now = Date.now } = {}) {
   return {
     async list() {
       const items = [];
@@ -51,17 +58,27 @@ export function createDeliveryReviewStore(directory) {
         const match = /^lineport-route-([a-f0-9]{64})\.jsonl$/.exec(name);
         if (!match) continue;
         const result = await inspectDelivery(directory, match[1]);
-        for (const id of result.unresolved) items.push({ identity: result.identity, revision: result.revision, id, text: describePayload(result.pending.get(id) || ''), pending: result.pending.size, route: result.route });
+        if (!result.unresolved.size) continue;
+        // A blocked route writes nothing more, so the journal's last write marks when it stopped.
+        const blockedSince = new Date((await lstat(path.join(directory, name))).mtimeMs).toISOString();
+        const backlog = [...result.pending.keys()].filter(id => !result.unresolved.has(id)).length;
+        for (const id of result.unresolved) items.push({ identity: result.identity, revision: result.revision, id, text: describePayload(result.pending.get(id) || ''),
+          pending: result.pending.size, backlog, blockedSince, route: result.route });
       }
       return { items };
     },
     async resolve(input) {
       if (!['received', 'skip'].includes(input.decision)) throw new HttpError(400, '請逐筆選擇確認收到或略過；不提供重送');
+      if (input.fastForward !== undefined && (input.fastForward !== true || input.decision !== 'received')) throw new HttpError(400, '快轉只能搭配「確認目的已收到」');
       const result = await inspectDelivery(directory, input.identity);
       if (result.revision !== input.revision || !result.unresolved.has(input.id)) throw new HttpError(409, '紀錄已變更，請重新載入後核對');
-      try { await appendRecord(path.join(directory, `lineport-review-${input.identity}.jsonl`), { version: 1, id: input.id, decision: input.decision, at: Date.now() }); }
+      // Fast-forward drops the queued backlog and moves the route's cursor to now; the audit row lists every dropped ID.
+      const dropped = input.fastForward ? [...result.pending.keys()].filter(id => id !== input.id && !result.unresolved.has(id)) : [];
+      const at = now();
+      const row = input.fastForward ? { version: 2, id: input.id, decision: 'received', fastForward: true, dropped, at } : { version: 1, id: input.id, decision: input.decision, at };
+      try { await appendRecord(path.join(directory, `lineport-review-${input.identity}.jsonl`), row); }
       catch { throw new HttpError(409, '人工決策未能確認保存；請保持停止、檢查磁碟與權限後重新載入核對，不要重送或刪改原紀錄'); }
-      return { resolved: true, decision: input.decision };
+      return { resolved: true, decision: input.decision, ...(input.fastForward ? { fastForward: true, dropped: dropped.length } : {}) };
     },
   };
 }

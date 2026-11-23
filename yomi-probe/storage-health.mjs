@@ -66,8 +66,8 @@ export async function storageHealth(directory) {
   const disk = await statfs(directory);
   const freeBytes = disk.bavail * disk.bsize;
   const blocked = freeBytes < MIN_FREE_BYTES || bytes >= MAX_DATA_BYTES || largest >= MAX_JOURNAL_BYTES;
-  return { bytes, files, largest, freeBytes, blocked, warning: blocked ? '儲存容量已達保守上限；新收件與發送停止，請停止服務並私下備份，保留全部待送與去重證據'
-    : bytes >= MAX_DATA_BYTES * .8 || largest >= MAX_JOURNAL_BYTES * .8 || freeBytes < MIN_FREE_BYTES * 4 ? '儲存容量接近上限，請安排停止與私人封存；封存不會清除原資料或增加可用空間' : '' };
+  return { bytes, files, largest, freeBytes, blocked, warning: blocked ? '儲存容量已達保守上限；新收件與發送停止，請停止轉送後到「設定與診斷」執行安全壓縮（會先自動封存），保留全部待送與去重證據'
+    : bytes >= MAX_DATA_BYTES * .8 || largest >= MAX_JOURNAL_BYTES * .8 || freeBytes < MIN_FREE_BYTES * 4 ? '儲存容量接近上限，請安排停止轉送後執行安全壓縮；壓縮前會先建立並驗證私人封存' : '' };
 }
 export async function assertWritable(file) {
   const dir = path.dirname(file);

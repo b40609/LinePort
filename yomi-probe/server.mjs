@@ -22,6 +22,7 @@ import { telegramThreadId, telegramChatEndpoint, telegramDestinations, createTop
 import { previewRules, settingsBackup, validateBackup, backupHealthAlert, safeDiagnostics } from './user-tools.mjs';
 import { createDeliveryReviewStore } from './delivery-review.mjs';
 import { storageHealth, privateSnapshot } from './storage-health.mjs';
+import { compactStorage } from './compaction.mjs';
 import { recentSenders, lineSourceSenders } from './source-senders.mjs';
 import { createDiscordClient, discordId } from './discord.mjs';
 import { notifyWindows } from './windows-notify.mjs';
@@ -162,6 +163,17 @@ const server = http.createServer(async (req, res) => {
         catch (error) { throw new HttpError(502, error instanceof RelayError ? `測試告警未送出：${error.message}` : '測試告警未送出；請確認聊天室 ID、Bot 是否在聊天室內與網路'); }
       });
       return send(res, 200, { sent: true });
+    }
+    if (req.url === '/api/storage/compact' && dataDirectory) {
+      await requireStopped();
+      if (input.confirm !== true) throw new HttpError(400, '請先確認：壓縮會以驗證過的精簡紀錄取代原紀錄（原檔另存私人封存）');
+      return send(res, 200, await operation(async () => {
+        try { return await compactStorage(dataDirectory); }
+        catch (error) {
+          if (error instanceof RelayError) throw error;
+          throw new RelayError('紀錄壓縮未完成，原資料保留；請保留私人封存並檢查磁碟空間與權限後重試');
+        }
+      }));
     }
     if (req.url === '/api/storage/archive' && dataDirectory) {
       await requireStopped();
