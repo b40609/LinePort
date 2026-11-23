@@ -12,6 +12,29 @@ export class TelegramRateLimit extends RelayError {
   }
 }
 
+// Raised only when the request provably never reached Telegram (no connection was made),
+// so the payload can be retried without risking a duplicate.
+export class TelegramUnsent extends RelayError {
+  constructor() {
+    super('Telegram 連線未建立（網路、DNS 或 TLS 失敗），訊息尚未送出；待送已保存，稍後自動重試');
+    this.unsent = true;
+  }
+}
+const UNSENT_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'EAI_FAIL', 'EAI_NONAME', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH',
+  'EADDRNOTAVAIL', 'UND_ERR_CONNECT_TIMEOUT', 'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY']);
+const unsentCode = code => typeof code === 'string' && (UNSENT_CODES.has(code) || code.startsWith('ERR_TLS_'));
+// Classify network exceptions without ever reading their (token-bearing) messages.
+// Timeouts, aborts, resets and anything unknown stay "uncertain": the request may have been delivered.
+export function requestNeverSent(error) {
+  if (!error || error.name === 'AbortError' || error.name === 'TimeoutError') return false;
+  const cause = error.cause;
+  // An aggregate (several connection attempts) counts only when every attempt failed before connecting.
+  const nested = Array.isArray(cause?.errors) ? cause.errors : Array.isArray(error.errors) ? error.errors : [];
+  if (nested.length) return nested.every(item => unsentCode(item?.code));
+  return unsentCode(error.code) || unsentCode(cause?.code);
+}
+
 export function createTelegramClient(token, { request = fetch } = {}) {
   if (typeof token !== 'string' || !/^\d{4,20}:[a-zA-Z0-9_-]{20,100}$/.test(token)) throw new RelayError('請設定有效的 Telegram Bot Token');
   async function call(method, data = {}) {
@@ -32,6 +55,7 @@ export function createTelegramClient(token, { request = fetch } = {}) {
     } catch (error) {
       // Network exceptions can contain the token-bearing URL. Never return them.
       if (error instanceof RelayError) throw error;
+      if (requestNeverSent(error)) throw new TelegramUnsent();
       throw new RelayError('Telegram 連線失敗或逾時；發送結果可能不明');
     }
   }

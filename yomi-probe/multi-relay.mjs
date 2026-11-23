@@ -37,7 +37,7 @@ async function rowsFrom(file) {
 export async function createMultiRelay({ config, adapters, platformErrors = {}, directory, now = Date.now, pause = sleep, operationTimeoutMs = 30000, queueLimit = 1000, deliveryBudget = 10, writeRecord = appendRecord }) {
   if (!Number.isSafeInteger(queueLimit) || queueLimit < 1 || !Number.isSafeInteger(deliveryBudget) || deliveryBudget < 1) throw new Error('Invalid queue limits');
   const cursors = new Map();
-  const cooldowns = new Map();
+  const cooldowns = new Map(), cooldownNotes = new Map();
   const reading = new Set(), delivering = new Set();
   const attemptedDestinations = new Set();
   const outputFile = path.join(directory, 'lineport-output.jsonl');
@@ -82,7 +82,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       edge.pending = reviewed.pending;
       status.pending = edge.pending.size;
       if (unresolved.size) {
-        status.phase = 'blocked'; status.stage = 'send_uncertain'; status.uncertain = unresolved.size;
+        status.phase = 'blocked'; status.stage = 'send_uncertain'; status.uncertain = unresolved.size; status.uncertainIds = [...unresolved].slice(0, 5);
         status.warning = '有發送結果不明的訊息，已暫停此路線；請停止轉送，到人工處理逐筆核對。重啟不會自動重送。';
         continue;
       }
@@ -112,7 +112,8 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
   function refresh() {
     for (const key of ['forwarded', 'uncertain', 'errors']) state[key] = edges.reduce((sum, edge) => sum + edge.status[key], 0);
     state.errors += [...sources.values()].reduce((sum, source) => sum + source.failures, 0);
-    state.sources = [...sources.values()].map(source => ({ ...source.endpoint, polls: source.polls, lastPoll: source.lastPoll, received: source.received, decryptFailed: source.decryptFailed, warning: source.warning }));
+    state.sources = [...sources.values()].map(source => ({ ...source.endpoint, polls: source.polls, lastPoll: source.lastPoll, received: source.received, decryptFailed: source.decryptFailed, warning: source.warning,
+      consecutiveErrors: source.consecutiveErrors || 0, loginRequired: Boolean(source.loginRequired) }));
     state.phase = edges.every(edge => ['failed', 'blocked'].includes(edge.status.phase)) ? 'failed'
       : edges.some(edge => edge.status.phase !== 'running' || edge.status.warning) || [...sources.values()].some(source => source.warning && !source.historyOnly) ? 'degraded' : 'running';
     state.warning = state.phase === 'running' ? '' : '部分路線受阻，請查看各路線與來源狀態';
@@ -150,7 +151,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         source.pendingRead ||= Promise.resolve().then(() => adapters[source.endpoint.platform].read(source.endpoint.id, oldest, known));
         const messages = await withDeadline(source.pendingRead, operationTimeoutMs);
         source.pendingRead = null;
-        source.retryAt = 0; source.consecutiveErrors = 0;
+        source.retryAt = 0; source.consecutiveErrors = 0; source.loginRequired = false;
         if (messages === null) {
           source.warning = 'LINE 正在分批補讀歷史訊息';
           source.historyOnly = false;
@@ -183,6 +184,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         source.failures++; source.consecutiveErrors = (source.consecutiveErrors || 0) + 1;
         source.retryAt = now() + Math.min(60000, 3000 * 2 ** Math.min(source.consecutiveErrors - 1, 5));
         source.historyOnly = false;
+        source.loginRequired = error?.loginRequired === true;
         if (error instanceof LineHistoryError) {
           source.warning = 'LINE 歷史補讀游標無法前進，稍後重試';
         } else if (error instanceof ProtocolReadError) {
@@ -248,7 +250,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             const parent = edge.replies.get(id);
             const replyTo = edge.rule.replies && parent ? destinationReply(edge.destination.platform, edge.destination.id, edge.delivered.get(parent)) : undefined;
             status.replyNotice = parent && !replyTo ? '原訊息未轉送、尚未確認送達或沒有可用對照；這則改送一般訊息，不補送原訊息' : replyTo ? (edge.destination.platform === 'line' ? '引用此路線已確認送達的原訊息；引用失敗會暫停此路線，請先確認平台狀態' : '引用此路線已確認送達的原訊息；平台找不到原訊息時可能改送一般訊息') : '';
-            let result;
+            let result, deliveredChunks = 0;
             try {
               attempted = true;
               attemptedDestinations.add(destinationKey);
@@ -267,6 +269,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
                   ...(edge.destination.threadId !== undefined ? { threadId: edge.destination.threadId } : {})
                 }), operationTimeoutMs, () => controller.abort());
                 if (!sendResult?.id) throw new Error('Missing acknowledgement');
+                deliveredChunks++;
                 if (!firstResult) firstResult = sendResult;
                 allOutputIds.push(sendResult.id, ...(sendResult.ids || []));
               }
@@ -276,10 +279,22 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
                 const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + error.retryAfterMs);
                 await edge.record({ id, outcome: 'retry', retryAt });
                 cooldowns.set(edge.destination.platform, retryAt);
+                cooldownNotes.delete(edge.destination.platform);
                 status.stage = 'waiting';
                 break;
               }
-              status.uncertain++; status.stage = 'send_uncertain'; status.phase = 'blocked';
+              // Only a request that provably never left this machine may be retried; any delivered chunk
+              // means a retry would duplicate it, so that case stays uncertain.
+              if (error?.unsent === true && deliveredChunks === 0) {
+                edge.unsentFailures = (edge.unsentFailures || 0) + 1;
+                const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + Math.min(300000, 5000 * 2 ** Math.min(edge.unsentFailures - 1, 6)));
+                await edge.record({ id, outcome: 'retry', retryAt });
+                cooldowns.set(edge.destination.platform, retryAt);
+                cooldownNotes.set(edge.destination.platform, error.message);
+                status.stage = 'waiting';
+                break;
+              }
+              status.uncertain++; status.uncertainIds = [...(status.uncertainIds || []), id].slice(-5); status.stage = 'send_uncertain'; status.phase = 'blocked';
               status.warning = (error instanceof RelayError ? error.message + '；' : '') + '發送結果不明，已暫停此路線，請核對目的訊息；其他路線繼續。';
               await edge.record({ id, outcome: 'uncertain' });
               throw error;
@@ -292,7 +307,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             const acknowledged = destinationReply(edge.destination.platform, edge.destination.id, result.id);
             await edge.record({ id, outcome: 'sent', ...(acknowledged ? { destinationId: acknowledged } : {}) });
             if (acknowledged) edge.delivered.set(id, acknowledged);
-            edge.pending.delete(id);
+            edge.pending.delete(id); edge.unsentFailures = 0;
             status.forwarded++; status.lastSend = new Date(now()).toISOString();
           }
           status.stage = 'waiting';
@@ -312,7 +327,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       edge.status.pending = edge.pending.size;
       edge.status.retryAt = cooldowns.get(edge.destination.platform) > now() ? cooldowns.get(edge.destination.platform) : 0;
       if (edge.status.phase === 'running') edge.status.warning = cooldowns.get(edge.destination.platform) > now()
-        ? `${edge.destination.platform === 'discord' ? 'Discord' : 'Telegram'} 限流中，待送訊息已保存，等待後自動重試` : edge.pending.size && !inSchedule(edge.rule.schedule, now()) ? '時段外，已保留待送；進入時段後自動處理' : edge.pending.size >= Math.ceil(queueLimit * 0.8)
+        ? cooldownNotes.get(edge.destination.platform) || `${edge.destination.platform === 'discord' ? 'Discord' : 'Telegram'} 限流中，待送訊息已保存，等待後自動重試` : edge.pending.size && !inSchedule(edge.rule.schedule, now()) ? '時段外，已保留待送；進入時段後自動處理' : edge.pending.size >= Math.ceil(queueLimit * 0.8)
         ? `待送佇列接近容量（${edge.pending.size}/${queueLimit}）；未入列的訊息將於後續補讀` : capacity.warning;
     }
     refresh();
@@ -330,7 +345,7 @@ export async function createLineRelayAdapter(service, endpoints, { downloadPhoto
     contacts: line.some(endpoint => /^u/.test(endpoint.id)),
   })).map(endpoint => endpoint.id));
   const check = id => {
-    if (service.loginRequired) throw new RelayError('LINE 登入已失效，請停止後重新授權');
+    if (service.loginRequired) throw Object.assign(new RelayError('LINE 登入已失效，請停止後重新授權'), { loginRequired: true });
     if (!allowed.has(id)) throw new RelayError('LINE 聊天室已不在群組或好友列表內');
   };
   const protection = new Map();

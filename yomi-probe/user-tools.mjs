@@ -1,4 +1,4 @@
-import { normalizeConfig, matchingContent, textRejection } from './route-config.mjs';
+import { normalizeConfig, normalizeHealthAlert, matchingContent, textRejection } from './route-config.mjs';
 import { HttpError } from './local-http.mjs';
 import { inSchedule } from './rule-options.mjs';
 import { RelayError, safeRelayStage, safeDestinationFailureReason } from './relay-health.mjs';
@@ -34,8 +34,13 @@ export function previewRules(input) {
   }) };
 }
 
-export function settingsBackup(config) {
-  return { format: 'lineport-settings', version: 1, appVersion: '1.0.2', exportedAt: new Date().toISOString(), config: normalizeConfig(config) };
+export function settingsBackup(config, healthAlert) {
+  return { format: 'lineport-settings', version: 1, appVersion: '1.0.2', exportedAt: new Date().toISOString(), config: normalizeConfig(config),
+    ...(healthAlert ? { healthAlert: normalizeHealthAlert(healthAlert) } : {}) };
+}
+// Optional and absent from older backups; undefined means "leave current alert settings unchanged".
+export function backupHealthAlert(backup) {
+  return backup?.healthAlert === undefined ? undefined : normalizeHealthAlert(backup.healthAlert);
 }
 export function validateBackup(backup) {
   if (!backup || backup.format !== 'lineport-settings' || backup.version !== 1) throw new HttpError(400, '不支援的備份格式；請使用 LinePort 設定備份 JSON');

@@ -6,7 +6,8 @@ import path from 'node:path';
 import { normalizeConfig, matchingText, createSettingsStore, configRevision } from './route-config.mjs';
 import { createMultiRelay } from './multi-relay.mjs';
 import { readLineSince, lineDirectory, linePictureUrl } from './line-directory.mjs';
-import { TelegramRateLimit } from './telegram.mjs';
+import { TelegramRateLimit, TelegramUnsent } from './telegram.mjs';
+import { RelayError } from './relay-health.mjs';
 
 const endpoint = (id, platform = 'line') => ({ platform, id, name: id });
 const rule = (id = 'one', sources = [endpoint('csource')], destinations = [endpoint('cdestination')]) => ({ id, name: id, enabled: true, sources, destinations });
@@ -466,4 +467,66 @@ test('long text exceeding Telegram limits is chunked and forwarded sequentially'
   assert.ok(sent[0].text.includes('(1/3)'));
   assert.ok(sent[1].text.includes('(2/3)'));
   assert.ok(sent[2].text.includes('(3/3)'));
+});
+
+test('a Telegram request that never connected is retried with backoff instead of locking the route', async () => {
+  const directory = await fixture(), value = config(rule('one', [endpoint('cs')], [endpoint('-1', 'telegram')]));
+  let clock = 1000, attempts = 0;
+  const telegram = adapter({ send: async () => { if (++attempts <= 2) throw new TelegramUnsent(); return { id: '-1:7' }; } });
+  const options = { config: value, adapters: { line: adapter({ messages: [message('a')] }), telegram }, directory, now: () => clock, pause: async () => {} };
+  const relay = await createMultiRelay(options);
+  await relay.tick();
+  assert.equal(attempts, 1);
+  assert.equal(relay.state.routes[0].phase, 'running');
+  assert.equal(relay.state.uncertain, 0);
+  assert.equal(relay.state.routes[0].pending, 1);
+  assert.match(relay.state.routes[0].warning, /尚未送出/);
+  await relay.tick(); // still cooling down (5 s)
+  assert.equal(attempts, 1);
+  clock = 6000; await relay.tick();
+  assert.equal(attempts, 2);
+  clock = 12000; await relay.tick(); // second failure doubled the wait to 10 s
+  assert.equal(attempts, 2);
+  // Durable across restart: the retry row resolves the "sending" row, so nothing is held for review.
+  const restarted = await createMultiRelay(options);
+  assert.equal(restarted.state.routes[0].phase, 'running');
+  clock = 17000; await restarted.tick();
+  assert.equal(attempts, 3);
+  assert.equal(restarted.state.forwarded, 1);
+  assert.equal(restarted.state.routes[0].pending, 0);
+  assert.equal(restarted.state.uncertain, 0);
+});
+
+test('timeouts, resets and a failure after a delivered chunk stay uncertain and expose only message IDs', async () => {
+  for (const [name, error, text] of [['timeout', Object.assign(new Error('x'), { name: 'TimeoutError' }), 'short'],
+    ['reset', new RelayError('Telegram 連線失敗或逾時；發送結果可能不明'), 'short'],
+    ['second chunk', new TelegramUnsent(), 'a'.repeat(9000)]]) {
+    const directory = await fixture();
+    let attempts = 0;
+    const telegram = adapter({ send: async () => { if (++attempts === (name === 'second chunk' ? 2 : 1)) throw error; return { id: `-1:${attempts}` }; } });
+    const options = { config: config(rule('one', [endpoint('cs')], [endpoint('-1', 'telegram')])), adapters: { line: adapter({ messages: [message('m-1', text)] }), telegram }, directory, now: () => 1000, pause: async () => {} };
+    const relay = await createMultiRelay(options);
+    await relay.tick();
+    assert.equal(relay.state.routes[0].phase, 'blocked', name);
+    assert.equal(relay.state.routes[0].stage, 'send_uncertain', name);
+    assert.deepEqual(relay.state.routes[0].uncertainIds, ['m-1'], name);
+    const restarted = await createMultiRelay(options);
+    assert.equal(restarted.state.routes[0].phase, 'blocked', name);
+    assert.deepEqual(restarted.state.routes[0].uncertainIds, ['m-1'], name);
+  }
+});
+
+test('source status reports consecutive read failures and LINE login loss as fixed fields', async () => {
+  let failure = new Error('SYNTHETIC_PRIVATE');
+  const line = adapter();
+  line.read = async () => { throw failure; };
+  let clock = 1000;
+  const relay = await createMultiRelay({ config: config(rule()), adapters: { line }, directory: await fixture(), now: () => clock });
+  for (let index = 0; index < 5; index++) { clock += 120000; await relay.tick(); }
+  assert.equal(relay.state.sources[0].consecutiveErrors, 5);
+  assert.equal(relay.state.sources[0].loginRequired, false);
+  failure = Object.assign(new RelayError('LINE 登入已失效，請停止後重新授權'), { loginRequired: true });
+  clock += 120000; await relay.tick();
+  assert.equal(relay.state.sources[0].loginRequired, true);
+  assert.ok(!JSON.stringify(relay.state).includes('SYNTHETIC_PRIVATE'));
 });

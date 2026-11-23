@@ -86,9 +86,9 @@ test('QR API isolates iPad login, protects its image and cancels while busy', as
   assert.equal(after.qr, ''); assert.equal(after.connected, false);
   assert.ok(!after.error.includes('sensitive'));
 });
-async function setup(t, overrides = {}, relayController, settingsStore, runPwlessLogin = async () => {}, runQrLogin, prepareRestart, autostartStore) {
+async function setup(t, overrides = {}, relayController, settingsStore, runPwlessLogin = async () => {}, runQrLogin, prepareRestart, autostartStore, extra = {}) {
   const service = Object.assign(new EventEmitter(), { resumeSession: async () => true, client: { getAllChatMids: async () => ({ memberChats: [] }), getChats: async () => [] } }, overrides);
-  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin, runQrLogin, prepareRestart, relayController, settingsStore, autostartStore });
+  const server = createProbeServer({ service, token: fakeToken, runPwlessLogin, runQrLogin, prepareRestart, relayController, settingsStore, autostartStore, ...extra });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
@@ -116,8 +116,11 @@ async function setup(t, overrides = {}, relayController, settingsStore, runPwles
 test('autostart API reports preference state and applies shortcut changes', async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'lineport-server-autostart-'));
   t.after(async () => { const fs = await import('node:fs/promises'); await fs.rm(home, { recursive: true, force: true }); });
-  const store = createAutostartStore(home, { apply: async () => {} });
+  const applied = [];
+  const store = createAutostartStore(home, { apply: async (value, where) => { applied.push(where); return [{ kind: 'service', enabled: value.service }]; } });
   const { call } = await setup(t, {}, undefined, undefined, undefined, undefined, undefined, store);
+  // Regression: the API used to also apply shortcuts against the real LOCALAPPDATA, overwriting live autostart scripts.
+  t.after(() => assert.deepEqual([...new Set(applied)], [home]));
   const initial = await call('/api/autostart', undefined, {}, 'GET');
   assert.equal(initial.status, 200);
   assert.deepEqual(JSON.parse(initial.body).autostart, { service: false, relay: false });
@@ -127,7 +130,7 @@ test('autostart API reports preference state and applies shortcut changes', asyn
   assert.deepEqual(JSON.parse(updated.body).autostart, { service: true, relay: true });
   const seeded = await call('/api/autostart', undefined, {}, 'GET');
   assert.deepEqual(JSON.parse(seeded.body).autostart, { service: true, relay: true });
-  assert.deepEqual(JSON.parse(await readFile(path.join(home, 'LinePort', 'autostart.json'), 'utf8')), { service: true, relay: true });
+  assert.deepEqual(JSON.parse(await readFile(path.join(home, 'LinePort', 'autostart.json'), 'utf8')), { service: true, relay: true, schemaVersion: 2, writtenByVersion: JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8')).version });
 });
 test('autostart endpoint stays hidden when the environment has no store', async t => {
   const { call } = await setup(t);
@@ -340,4 +343,63 @@ test('account operations require a stopped relay, including unknown status', asy
   phase = 'stopped';
   assert.equal((await call('/api/resume')).status, 200);
   assert.equal(resumes, 1);
+});
+
+test('health alert settings save without stopping the relay, reuse the bot token and keep backups compatible', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-health-api-'));
+  const botToken = '123456:SYNTHETIC_TOKEN_NOT_FOR_EXPORT_123';
+  const store = createSettingsStore(directory);
+  const sent = [];
+  const telegramFactory = token => ({ send: async (...args) => { sent.push([token, ...args]); return { id: '-1001:1' }; } });
+  const { call } = await setup(t, {}, { status: async () => ({ phase: 'running' }) }, store, undefined, undefined, undefined, undefined, { telegramFactory });
+  assert.deepEqual(JSON.parse((await call('/api/health-alert', undefined, {}, 'GET')).body), { healthAlert: { enabled: false, telegramChatId: '' }, telegramConfigured: false });
+  const noBot = await call('/api/health-alert', JSON.stringify({ enabled: true, telegramChatId: '-1001' }));
+  assert.equal(noBot.status, 400); assert.match(JSON.parse(noBot.body).error, /連結 Telegram Bot/);
+  for (const bad of [{ enabled: 'yes' }, { enabled: true }, { enabled: false, telegramChatId: 'abc' }, { enabled: false, telegramChatId: '-1', telegramThreadId: 0 }]) {
+    assert.equal((await call('/api/health-alert', JSON.stringify(bad))).status, 400, JSON.stringify(bad));
+  }
+  await store.saveTelegram(botToken);
+  const saved = await call('/api/health-alert', JSON.stringify({ enabled: true, telegramChatId: '-1001', telegramThreadId: 9 }));
+  assert.equal(saved.status, 200, 'saving alerts does not require stopping the running relay');
+  assert.deepEqual(JSON.parse(saved.body).healthAlert, { enabled: true, telegramChatId: '-1001', telegramThreadId: 9 });
+  const onDisk = await readFile(path.join(directory, 'lineport-health-alert.json'), 'utf8');
+  assert.ok(!onDisk.includes('SYNTHETIC_TOKEN'));
+  assert.equal((await call('/api/health-alert/test')).status, 200);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].slice(0, 2), [botToken, '-1001']);
+  assert.deepEqual(sent[0][3], { threadId: 9 });
+  assert.match(sent[0][2], /測試告警/);
+  assert.ok(!sent[0][2].includes('SYNTHETIC_TOKEN'));
+  // Backups carry the alert destination but never the token; older backups without it still validate.
+  const backup = JSON.parse((await call('/api/settings/backup', undefined, {}, 'GET')).body);
+  assert.deepEqual(backup.healthAlert, { enabled: true, telegramChatId: '-1001', telegramThreadId: 9 });
+  assert.ok(!JSON.stringify(backup).includes('SYNTHETIC_TOKEN'));
+  const { healthAlert, ...legacy } = backup;
+  assert.equal((await call('/api/settings/validate', JSON.stringify({ backup: legacy }))).status, 200);
+  assert.equal((await call('/api/settings/validate', JSON.stringify({ backup }))).status, 200);
+});
+
+test('a failing test alert reports a safe error', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-health-api-'));
+  const store = createSettingsStore(directory);
+  await store.saveTelegram('123456:SYNTHETIC_TOKEN_NOT_FOR_EXPORT_123');
+  await store.saveHealthAlert({ enabled: true, telegramChatId: '-1001' });
+  const telegramFactory = () => ({ send: async () => { throw new Error('SYNTHETIC_PRIVATE https://api.telegram.org/botSECRET'); } });
+  const { call } = await setup(t, {}, { status: async () => ({ phase: 'stopped' }) }, store, undefined, undefined, undefined, undefined, { telegramFactory });
+  const reply = await call('/api/health-alert/test');
+  assert.equal(reply.status, 502);
+  assert.ok(!reply.body.includes('SYNTHETIC') && !reply.body.includes('SECRET'));
+});
+
+test('relay start and stop record the intent the watchdog honours', async t => {
+  const intents = [];
+  const store = { load: async () => normalizeConfig({ version: 1, rules: [{ id: 'r', name: 'r', enabled: true, sources: [{ platform: 'telegram', id: '-1' }], destinations: [{ platform: 'telegram', id: '-2' }] }] }), telegramToken: async () => 'x' };
+  const relay = { status: async () => ({ phase: 'stopped' }), startRules: async () => {}, stop: async () => {} };
+  const autostart = { load: async () => ({ service: true, relay: true }), saveRelayIntent: async value => { intents.push(value); } };
+  const { call } = await setup(t, {}, relay, store, undefined, undefined, undefined, autostart);
+  assert.equal((await call('/api/relay/start', '{"useRules":true}')).status, 202);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal((await call('/api/relay/stop')).status, 202);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(intents, ['running', 'stopped']);
 });

@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createTelegramClient, createTelegramInbox, telegramMessage, TelegramRateLimit } from './telegram.mjs';
+import { createTelegramClient, createTelegramInbox, telegramMessage, TelegramRateLimit, TelegramUnsent, requestNeverSent } from './telegram.mjs';
+import http from 'node:http';
+import { once } from 'node:events';
 
 const token = '123456:synthetic_token_for_tests_only';
 const update = (id, extra = {}) => ({ update_id: id, message: { message_id: id, chat: { id: -123 }, date: 1000, text: 'synthetic text', ...extra } });
@@ -98,4 +100,40 @@ test('an overflowing update ID is rejected before it can corrupt the saved offse
   const inbox = await createTelegramInbox(file, { getUpdates: async () => [{ update_id: Number.MAX_SAFE_INTEGER }] }, []);
   await assert.rejects(inbox.poll());
   await createTelegramInbox(file, { getUpdates: async () => [] }, []);
+});
+
+const networkError = (code, nested) => Object.assign(new TypeError(`fetch failed https://api.telegram.org/bot${token}/sendMessage`),
+  { cause: nested ? Object.assign(new AggregateError(nested.map(item => Object.assign(new Error(item), { code: item }))), { code: nested[0] }) : Object.assign(new Error(`connect ${code} ${token}`), { code }) });
+
+test('only failures before a connection exists are classified as provably unsent', () => {
+  for (const code of ['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT', 'ERR_TLS_CERT_ALTNAME_INVALID', 'CERT_HAS_EXPIRED']) {
+    assert.equal(requestNeverSent(networkError(code)), true, code);
+  }
+  assert.equal(requestNeverSent(networkError(null, ['ECONNREFUSED', 'ENETUNREACH'])), true, 'all happy-eyeballs attempts refused');
+  assert.equal(requestNeverSent(networkError(null, ['ECONNREFUSED', 'ECONNRESET'])), false, 'one attempt may have connected');
+  for (const code of ['ECONNRESET', 'UND_ERR_SOCKET', 'EPIPE', 'ETIMEDOUT', 'UND_ERR_HEADERS_TIMEOUT', undefined]) assert.equal(requestNeverSent(networkError(code)), false, String(code));
+  for (const name of ['AbortError', 'TimeoutError']) assert.equal(requestNeverSent(Object.assign(new Error('x'), { name, code: 'ENOTFOUND' })), false, name);
+  assert.equal(requestNeverSent(new SyntaxError('Unexpected token')), false);
+});
+
+test('send reports unsent versus uncertain network failures without exposing the token', async () => {
+  for (const [code, unsent] of [['ENOTFOUND', true], ['ECONNREFUSED', true], ['ECONNRESET', false], ['UND_ERR_SOCKET', false]]) {
+    const client = createTelegramClient(token, { request: async () => { throw networkError(code); } });
+    await assert.rejects(client.send('-123', 'test'), error => {
+      assert.equal(error instanceof TelegramUnsent, unsent, code);
+      assert.equal(error.unsent === true, unsent, code);
+      assert.match(error.message, unsent ? /尚未送出/ : /結果可能不明/);
+      assert.ok(!error.message.includes(token) && !error.message.includes(code));
+      return true;
+    });
+  }
+  const timeout = createTelegramClient(token, { request: async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); } });
+  await assert.rejects(timeout.send('-123', 'test'), error => !(error instanceof TelegramUnsent) && /結果可能不明/.test(error.message));
+});
+
+test('a real refused local connection is classified as unsent through fetch', async () => {
+  const server = http.createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const { port } = server.address(); await new Promise(resolve => server.close(resolve));
+  const client = createTelegramClient(token, { request: (_url, options) => fetch(`http://127.0.0.1:${port}/`, options) });
+  await assert.rejects(client.send('-123', 'test'), error => error instanceof TelegramUnsent);
 });

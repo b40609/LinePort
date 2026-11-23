@@ -15,19 +15,20 @@ import { guardLineSession } from './line-e2ee-state.mjs';
 import { createRelayController } from './relay-controller.mjs';
 import { RelayError } from './relay-health.mjs';
 import { normalizeConfig, configRevision, createSettingsStore } from './route-config.mjs';
-import { createAutostartStore, applyAutostartShortcuts, seedFromInstallerTask } from './autostart.mjs';
+import { createAutostartStore, applyAutostartShortcuts, seedFromInstallerTask, refreshAutostartScripts } from './autostart.mjs';
 import { lineDirectory } from './line-directory.mjs';
 import { createTelegramClient, createTelegramInbox, telegramMessage } from './telegram.mjs';
 import { telegramThreadId, telegramChatEndpoint, telegramDestinations, createTopicEndpoint } from './telegram-topics.mjs';
-import { previewRules, settingsBackup, validateBackup, safeDiagnostics } from './user-tools.mjs';
+import { previewRules, settingsBackup, validateBackup, backupHealthAlert, safeDiagnostics } from './user-tools.mjs';
 import { createDeliveryReviewStore } from './delivery-review.mjs';
 import { storageHealth, privateSnapshot } from './storage-health.mjs';
 import { recentSenders, lineSourceSenders } from './source-senders.mjs';
 import { createDiscordClient, discordId } from './discord.mjs';
 import { notifyWindows } from './windows-notify.mjs';
+import { createHealthMonitor, startHealthMonitor, telegramAlertChannel, windowsAlertChannel, formatTestAlert } from './health-alert.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, relayController, settingsStore, reviewStore, dataDirectory, autostartStore, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, port = 18765, token = randomBytes(32).toString('hex') }) {
+export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, relayController, settingsStore, reviewStore, dataDirectory, autostartStore, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, healthAlerts = false, notify = notifyWindows, port = 18765, token = randomBytes(32).toString('hex') }) {
 service.on('error', () => {});
 const device = lineDevice();
 const state = { device: device.id, phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
@@ -37,8 +38,20 @@ service.on('line:loginRequired', () => {
   state.connected = false; state.phase = 'login_required'; state.pin = '';
   state.error = 'LINE 登入已失效，請停止轉送後重新授權；若另一個裝置被登出，請停止共存實驗。';
   groups.clear();
-  notifyWindows('LinePort 警告', 'LINE 登入已失效，請重新掃碼授權');
+  void healthMonitor?.check().catch(() => {});
 });
+// Health checks run on their own timer in this UI process, isolated from the relay worker.
+async function healthSnapshot() {
+  const relay = relayController ? await relayController.status() : {};
+  let storage = null;
+  if (dataDirectory) { try { storage = await storageHealth(dataDirectory); } catch {} }
+  return { relay, account: { phase: state.phase }, storage };
+}
+const healthMonitor = healthAlerts ? (() => {
+  const monitor = createHealthMonitor({ channels: [windowsAlertChannel(notify), ...(settingsStore?.healthAlert ? [telegramAlertChannel(settingsStore, telegramFactory)] : [])] });
+  return { check: async () => monitor.check(await healthSnapshot()), monitor };
+})() : null;
+function recordRelayIntent(desired) { void autostartStore?.saveRelayIntent?.(desired).catch(() => {}); }
 let relayAction = '';
 async function requireStopped() {
   if (!relayController || (await relayController.status()).phase !== 'stopped') throw new HttpError(409, '請先停止轉送，再修改規則或平台連結');
@@ -83,7 +96,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { config, revision: configRevision(config), telegramConfigured: Boolean(await settingsStore.telegramToken()), telegramProtected: Boolean(await settingsStore.telegramProtected?.()), discordConfigured: Boolean(await settingsStore.discordToken?.()), discordProtected: Boolean(await settingsStore.discordProtected?.()), autostart: autostartStore ? await autostartStore.load() : null, telegramTopics });
     }
     if (req.method === 'GET' && req.url === '/api/autostart' && autostartStore) return send(res, 200, { autostart: await autostartStore.load() });
-    if (req.method === 'GET' && req.url === '/api/settings/backup' && settingsStore) return send(res, 200, settingsBackup(await settingsStore.load()));
+    if (req.method === 'GET' && req.url === '/api/settings/backup' && settingsStore) return send(res, 200, settingsBackup(await settingsStore.load(), await settingsStore.healthAlert?.()));
+    if (req.method === 'GET' && req.url === '/api/health-alert' && settingsStore?.healthAlert) return send(res, 200, { healthAlert: await settingsStore.healthAlert(), telegramConfigured: Boolean(await settingsStore.telegramToken()) });
     if (req.method === 'GET' && req.url === '/api/diagnostics') return send(res, 200, safeDiagnostics(relayController ? await relayController.status() : {}, state.connected));
     if (req.method === 'GET' && req.url === '/api/storage' && dataDirectory) return send(res, 200, await storageHealth(dataDirectory));
     if (req.method === 'GET' && req.url === '/api/delivery/review' && reviewStore) {
@@ -102,11 +116,9 @@ const server = http.createServer(async (req, res) => {
     if (state.busy) return send(res, 409, { error: '前一個操作尚未完成' });
     if (req.url === '/api/autostart') {
       if (!autostartStore) return send(res, 404, { error: '找不到操作' });
+      // The store applies shortcuts for its own LOCALAPPDATA; never fall back to the real profile here.
       const enabled = await autostartStore.save(input);
-      let shortcuts;
-      try { shortcuts = await applyAutostartShortcuts(enabled); }
-      catch { throw new HttpError(503, '自動啟動捷徑更新失敗；設定已保存，請檢查啟動資料夾權限後重試'); }
-      return send(res, 200, { autostart: enabled, shortcuts });
+      return send(res, 200, { autostart: enabled, shortcuts: autostartStore.lastShortcuts?.() });
     }
     if (req.url === '/api/device') {
       if (!['DESKTOPMAC', 'IOSIPAD'].includes(input.device)) throw new HttpError(400, '請選擇原有桌面授權或 iPad QR 登入');
@@ -134,6 +146,23 @@ const server = http.createServer(async (req, res) => {
       return send(res, 202, { device: target.id, restarting: true });
     }
     if (req.url === '/api/rules/preview') return send(res, 200, previewRules(input));
+    if (req.url === '/api/health-alert' && settingsStore?.saveHealthAlert) {
+      const healthAlert = await operation(async () => {
+        if (input.enabled === true && !await settingsStore.telegramToken()) throw new HttpError(400, '請先在「連結帳號」連結 Telegram Bot；系統健康告警會沿用同一個 Bot，不另存 Token');
+        return settingsStore.saveHealthAlert(input);
+      });
+      return send(res, 200, { healthAlert });
+    }
+    if (req.url === '/api/health-alert/test' && settingsStore?.healthAlert) {
+      await operation(async () => {
+        const settings = await settingsStore.healthAlert();
+        if (!settings.telegramChatId) throw new HttpError(400, '請先保存告警 Telegram 聊天室 ID');
+        if (!await settingsStore.telegramToken()) throw new HttpError(400, '請先在「連結帳號」連結 Telegram Bot');
+        try { await telegramAlertChannel(settingsStore, telegramFactory).send(formatTestAlert(Date.now())); }
+        catch (error) { throw new HttpError(502, error instanceof RelayError ? `測試告警未送出：${error.message}` : '測試告警未送出；請確認聊天室 ID、Bot 是否在聊天室內與網路'); }
+      });
+      return send(res, 200, { sent: true });
+    }
     if (req.url === '/api/storage/archive' && dataDirectory) {
       await requireStopped();
       return send(res, 200, await operation(async () => {
@@ -211,15 +240,18 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/settings/restore' && settingsStore) {
       await requireStopped();
       const config = validateBackup(input.backup);
+      const healthAlert = backupHealthAlert(input.backup);
       const result = await operation(async () => {
         if (input.revision !== configRevision(await settingsStore.load())) throw new HttpError(409, '設定已變更，請重新載入並檢查備份後再還原');
         if (!settingsStore.restore) throw new HttpError(503, '此環境未提供設定還原');
-        return settingsStore.restore(config);
+        const restored = await settingsStore.restore(config);
+        if (healthAlert && settingsStore.saveHealthAlert) await settingsStore.saveHealthAlert(healthAlert);
+        return restored;
       });
       return send(res, 200, { ...result, revision: configRevision(result.config) });
     }
     if (req.url === '/api/relay/stop' && relayController) {
-      relayAction = 'stopping';
+      relayAction = 'stopping'; recordRelayIntent('stopped');
       void operation(() => relayController.stop()).catch(() => {}).finally(() => { relayAction = ''; });
       return send(res, 202, { accepted: true });
     }
@@ -312,7 +344,7 @@ const server = http.createServer(async (req, res) => {
       if (endpoints.some(endpoint => endpoint.platform === 'discord') && !await settingsStore.discordToken?.()) throw new HttpError(400, '請先連結 Discord Bot');
       // Recheck after asynchronous configuration reads before acquiring the lock.
       if (state.busy) throw new HttpError(409, '前一個操作尚未完成');
-      relayAction = 'starting';
+      relayAction = 'starting'; recordRelayIntent('running');
       void operation(() => relayController.startRules(configRevision(config))).catch(() => {}).finally(() => { relayAction = ''; });
       return send(res, 202, { accepted: true });
     }
@@ -421,6 +453,10 @@ const server = http.createServer(async (req, res) => {
   } catch (error) { send(res, error instanceof HttpError ? error.status : 500, { error: error instanceof HttpError ? error.message : failure(error) }); }
 });
 server.lineportPort = port;
+if (healthMonitor) {
+  const stop = startHealthMonitor({ monitor: healthMonitor.monitor, snapshot: healthSnapshot });
+  server.on('close', stop);
+}
 return hardenServer(server);
 }
 
@@ -433,10 +469,11 @@ guardProtocol(LineClient);
 const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
 const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
 const { runQrLogin } = await import('./qr-login.mjs');
-const server = createProbeServer({ service: guardLineSession(new LineProtocolService()), runPwlessLogin, runQrLogin, prepareRestart: prepareDeviceRestart, onRestarted: () => process.exit(0), relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir, autostartStore: createAutostartStore(process.env.LOCALAPPDATA, { apply: applyAutostartShortcuts }) });
+const server = createProbeServer({ service: guardLineSession(new LineProtocolService()), runPwlessLogin, runQrLogin, prepareRestart: prepareDeviceRestart, onRestarted: () => process.exit(0), relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir, autostartStore: createAutostartStore(process.env.LOCALAPPDATA, { apply: applyAutostartShortcuts }), healthAlerts: true });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
 await stagedListen(server, lineDevice().id);
 await seedFromInstallerTask(process.env.LOCALAPPDATA, { apply: applyAutostartShortcuts }).catch(() => print('Could not seed the installer autostart choice; enable it on the page instead.'));
+await refreshAutostartScripts(process.env.LOCALAPPDATA).catch(() => print('Autostart scripts were left unchanged (written by a newer LinePort or not writable).'));
 await saveLauncherDevice(lineDevice().id).catch(() => print('Could not save device preference; select the same identity on the next launch.'));
 print('LinePort: http://127.0.0.1:18765/');
 }

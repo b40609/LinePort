@@ -72,6 +72,18 @@ export function normalizeConfig(input) {
   // Older releases reject version 2 instead of silently dropping a destination topic.
   return { version: rules.some(rule => rule.destinations.some(destination => destination.threadId !== undefined)) ? 2 : 1, rules };
 }
+// System health alerts reuse the saved Telegram Bot; only a destination chat is stored here.
+export const DEFAULT_HEALTH_ALERT = Object.freeze({ enabled: false, telegramChatId: '' });
+export function normalizeHealthAlert(input) {
+  if (input === undefined || input === null) return { ...DEFAULT_HEALTH_ALERT };
+  if (typeof input !== 'object' || Array.isArray(input) || typeof input.enabled !== 'boolean') invalid('系統健康告警設定格式不正確');
+  const chatId = input.telegramChatId === undefined ? '' : input.telegramChatId;
+  if (typeof chatId !== 'string' || chatId && (!/^-?[1-9]\d{0,15}$/.test(chatId) || !Number.isSafeInteger(Number(chatId)))) invalid('告警 Telegram 聊天室 ID 必須是數字');
+  if (input.enabled && !chatId) invalid('啟用系統健康告警前，請填寫 Telegram 聊天室 ID');
+  if (input.telegramThreadId !== undefined && input.telegramThreadId !== null && !telegramThreadId(input.telegramThreadId)) invalid('告警話題 ID 必須為 1–2147483647 的整數');
+  return { enabled: input.enabled, telegramChatId: chatId,
+    ...(telegramThreadId(input.telegramThreadId) ? { telegramThreadId: input.telegramThreadId } : {}) };
+}
 export function textRejection(rule, message, sourceKey, allowEmpty = false) {
   if (!senderMatches(rule, sourceKey, message)) return '非指定發訊者；請核對此來源的人員 ID';
   if (rule.schedule?.outside === 'skip' && !inSchedule(rule.schedule, Number(message.createdTime || message.deliveredTime))) return '訊息時間在時段外；此規則設定為略過';
@@ -104,6 +116,7 @@ export async function atomicJson(file, value) {
 export function createSettingsStore(directory, protectionOptions) {
   const configFile = path.join(directory, 'lineport-rules.json');
   const topicsFile = path.join(directory, 'lineport-telegram-topics.json');
+  const healthAlertFile = path.join(directory, 'lineport-health-alert.json');
   const telegram = botCredentials(directory, 'telegram', atomicJson, protectionOptions);
   const discord = botCredentials(directory, 'discord', atomicJson, protectionOptions);
   return {
@@ -141,6 +154,12 @@ export function createSettingsStore(directory, protectionOptions) {
       await atomicJson(topicsFile, valid);
       return valid;
     },
+    // Stored apart from the rules so changing alerts never alters the running relay's config revision.
+    async healthAlert() {
+      try { return normalizeHealthAlert(JSON.parse(await readFile(healthAlertFile, 'utf8'))); }
+      catch (error) { if (error.code === 'ENOENT') return { ...DEFAULT_HEALTH_ALERT }; throw error; }
+    },
+    async saveHealthAlert(value) { const normalized = normalizeHealthAlert(value); await atomicJson(healthAlertFile, normalized); return normalized; },
     telegramToken: () => telegram.token(),
     saveTelegram: (token, useProtection = false) => telegram.save(token, useProtection),
     telegramProtected: () => telegram.protected(),

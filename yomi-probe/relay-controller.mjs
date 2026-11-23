@@ -41,9 +41,10 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
             forwarded: count(route.forwarded), pending: count(route.pending), uncertain: count(route.uncertain), errors: count(route.errors), skipped: count(route.skipped),
             lastSend: typeof route.lastSend === 'string' ? route.lastSend.slice(0, 40) : null, warning: String(route.warning || '').slice(0, 300), replyNotice: String(route.replyNotice || '').slice(0, 200),
             retryAt: count(route.retryAt),
+            uncertainIds: Array.isArray(route.uncertainIds) ? route.uncertainIds.filter(id => typeof id === 'string' && /^[A-Za-z0-9:_-]{1,80}$/.test(id)).slice(-5) : [],
             lastRead: route.lastRead ? readCounts(route.lastRead) : null,
           })) : [];
-          safe.sources = Array.isArray(state.sources) ? state.sources.slice(0, 100).map(source => ({ ...endpoint(source), polls: count(source.polls), received: count(source.received), decryptFailed: count(source.decryptFailed), lastPoll: typeof source.lastPoll === 'string' ? source.lastPoll.slice(0, 40) : null, warning: String(source.warning || '').slice(0, 300) })) : [];
+          safe.sources = Array.isArray(state.sources) ? state.sources.slice(0, 100).map(source => ({ ...endpoint(source), polls: count(source.polls), received: count(source.received), decryptFailed: count(source.decryptFailed), lastPoll: typeof source.lastPoll === 'string' ? source.lastPoll.slice(0, 40) : null, warning: String(source.warning || '').slice(0, 300), consecutiveErrors: count(source.consecutiveErrors), loginRequired: source.loginRequired === true })) : [];
           safe.warning = ['degraded', 'failed'].includes(state.phase) ? '部分路線受阻，請查看各路線與來源狀態' : '';
         }
         return safe;
