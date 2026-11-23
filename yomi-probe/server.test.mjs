@@ -403,3 +403,25 @@ test('relay start and stop record the intent the watchdog honours', async t => {
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(intents, ['running', 'stopped']);
 });
+
+test('graceful shutdown requires the page token and a stopped relay, then calls onShutdown once', async t => {
+  let phase = 'running', shutdowns = 0;
+  const { call } = await setup(t, {}, { status: async () => ({ phase }) }, undefined, undefined, undefined, undefined, undefined, { onShutdown: () => { shutdowns++; } });
+  assert.equal((await call('/api/server/shutdown', '{}', { 'X-Probe-Token': 'wrong' })).status, 403);
+  assert.equal((await call('/api/server/shutdown')).status, 409);
+  phase = 'stopped';
+  assert.equal((await call('/api/server/shutdown')).status, 202);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(shutdowns, 1);
+});
+
+test('compaction API refuses without explicit confirmation or while relaying', async t => {
+  const folder = await mkdtemp(path.join(os.tmpdir(), 'lineport-server-compact-'));
+  let phase = 'running';
+  const { call } = await setup(t, {}, { status: async () => ({ phase }) }, undefined, undefined, undefined, undefined, undefined, { dataDirectory: folder });
+  assert.equal((await call('/api/storage/compact', '{"confirm":true}')).status, 409);
+  phase = 'stopped';
+  assert.equal((await call('/api/storage/compact', '{}')).status, 400);
+  const done = await call('/api/storage/compact', '{"confirm":true}');
+  assert.equal(done.status, 200); assert.equal(JSON.parse(done.body).compacted, 0);
+});

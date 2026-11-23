@@ -122,3 +122,30 @@ if($global:stopCalls -or $global:apiCalls) { throw 'Running service was changed'
 Write-Output 'reused'`);
   assert.match(stdout, /reused/);
 });
+
+test('a node.exe whose command line is hidden (elevated or other user) gets a clear hint and is never stopped', { skip: process.platform !== 'win32' }, async () => {
+  const { mocks, target, html } = await fixture();
+  const { stdout } = await run(`${mocks}
+function Get-CimInstance { [pscustomobject]@{Name='node.exe';ProcessId=123;CommandLine=$null} }
+try { Update-LinePortService ${quote(html)} ${quote(target)}; throw 'Expected rejection' } catch { if($_ -notmatch 'unrecognized' -or $_ -notmatch 'PID 123' -or $_ -notmatch '權限') { throw } }
+if($global:stopCalls -or $global:apiCalls) { throw 'Old service was changed' }
+Write-Output 'explained'`);
+  assert.match(stdout, /explained/);
+});
+
+test('services with the shutdown endpoint stop gracefully without Stop-Process', { skip: process.platform !== 'win32' }, async () => {
+  const { mocks, target, html } = await fixture();
+  const { stdout } = await run(`${mocks}
+function Invoke-RestMethod { param($Uri,$Method,$Headers,$ContentType,$Body,$TimeoutSec)
+ if($Uri -eq 'http://127.0.0.1:18765/api/status') { return [pscustomobject]@{busy=$false;phase='connected'} }
+ if($Headers['X-Probe-Token'] -ne '${'a'.repeat(64)}' -or $Method -ne 'Post') { throw 'Invalid request' }
+ if($Uri -eq 'http://127.0.0.1:18765/api/relay/stop') { $global:apiCalls++; $global:relay=$false; return }
+ if($Uri -eq 'http://127.0.0.1:18765/api/server/shutdown') { $global:shutdowns++; $global:ui=$false; return }
+ throw 'Unexpected request'
+}
+$global:shutdowns=0
+if (!(Update-LinePortService ${quote(html)} ${quote(target)})) { throw 'Update not selected' }
+if($global:shutdowns -ne 1 -or $global:stopCalls -ne 0) { throw 'Expected graceful shutdown only' }
+Write-Output 'graceful'`);
+  assert.match(stdout, /graceful/);
+});

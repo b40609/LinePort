@@ -1,4 +1,4 @@
-# Only replace a verified LinePort process. Never terminate an arbitrary port owner.
+﻿# Only replace a verified LinePort process. Never terminate an arbitrary port owner.
 function Get-LinePortPreferredDevice {
     $preferencePath = Join-Path $env:LOCALAPPDATA 'LinePort/launcher-device.json'
     if (!(Test-Path -LiteralPath $preferencePath)) { return 'DESKTOPMAC' }
@@ -23,7 +23,14 @@ function Get-LinePortProcess($Port, $Entry) {
     if ($listeners.Count -ne 1) { throw 'Cannot identify the local LinePort service; no process was stopped.' }
     $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($listeners[0].OwningProcess)"
     $pattern = '^"?[^"\r\n]*node\.exe"?\s+(?:"(?<script>[^"\r\n]+)"|(?<script>[^\s"]+))\s*$'
-    if ($process.Name -ne 'node.exe' -or $process.CommandLine -notmatch $pattern) { throw 'The port belongs to an unrecognized process; nothing was stopped.' }
+    if ($process.Name -eq 'node.exe' -and [string]::IsNullOrEmpty($process.CommandLine)) {
+        # Windows hides the command line of processes owned by another user or an elevated session.
+        throw "The port belongs to an unrecognized process; nothing was stopped. 連接埠 $Port 由 node.exe（PID $($process.ProcessId)）使用，但目前權限讀不到它的命令列，常見原因是舊版服務以系統管理員身分或其他 Windows 帳號執行。為了安全沒有停止任何程序。請改用同樣的身分關閉舊的 LinePort（或以系統管理員開啟工作管理員結束該 PID），也可以登出再登入後重新開啟 LinePort。"
+    }
+    if ($process.Name -ne 'node.exe' -or $process.CommandLine -notmatch $pattern) {
+        $owner = if ($process.Name) { $process.Name } else { '未知程式' }
+        throw "The port belongs to an unrecognized process; nothing was stopped. 連接埠 $Port 被 $owner（PID $($listeners[0].OwningProcess)）使用，不是可辨識的 LinePort 服務，沒有停止任何程序。請關閉該程式或改用其他電腦帳號後再開啟 LinePort。"
+    }
     $script = $Matches['script']
     if (![IO.Path]::IsPathRooted($script) -or [IO.Path]::GetFileName($script) -cne $Entry) { throw 'Unrecognized LinePort entrypoint; nothing was stopped.' }
     $directory = Split-Path $script -Parent
@@ -64,10 +71,25 @@ function Update-LinePortService($Html, $TargetDirectory) {
     }
     # Revalidate ownership immediately before stopping, including command and PID.
     $status = Invoke-RestMethod -Uri 'http://127.0.0.1:18765/api/status' -Method Get -Headers $headers -TimeoutSec 5
-    $headers.Clear()
-    if ($status.busy -ne $false -or $status.phase -notin @('idle', 'connected', 'login_required', 'failed')) { throw 'An operation or phone authorization is in progress; the old service was retained.' }
+    if ($status.busy -ne $false -or $status.phase -notin @('idle', 'connected', 'login_required', 'failed')) { $headers.Clear(); throw 'An operation or phone authorization is in progress; the old service was retained.' }
     $current = Get-LinePortProcess 18765 'server.mjs'
-    if ($current.Id -ne $old.Id -or $current.Command -cne $old.Command) { throw 'The local service changed during the update; nothing else was stopped.' }
+    if ($current.Id -ne $old.Id -or $current.Command -cne $old.Command) { $headers.Clear(); throw 'The local service changed during the update; nothing else was stopped.' }
+    # v1.2.0+ services shut down gracefully on request; older ones (no endpoint) fall back to Stop-Process.
+    $graceful = $false
+    try {
+        $null = Invoke-RestMethod -Uri 'http://127.0.0.1:18765/api/server/shutdown' -Method Post -Headers $headers -ContentType 'application/json' -Body '{}' -TimeoutSec 10
+        $graceful = $true
+    } catch { }
+    $headers.Clear()
+    if ($graceful) {
+        for ($attempt = 0; $attempt -lt 40; $attempt++) {
+            if (!(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort 18765 -State Listen -ErrorAction SilentlyContinue)) { return $true }
+            Start-Sleep -Milliseconds 250
+        }
+        # Still listening: re-check ownership before forcing it.
+        $current = Get-LinePortProcess 18765 'server.mjs'
+        if ($current.Id -ne $old.Id -or $current.Command -cne $old.Command) { throw 'The local service changed during the update; nothing else was stopped.' }
+    }
     Stop-Process -Id $old.Id -ErrorAction Stop
     for ($attempt = 0; $attempt -lt 40; $attempt++) {
         if (!(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort 18765 -State Listen -ErrorAction SilentlyContinue)) { return $true }

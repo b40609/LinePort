@@ -29,7 +29,7 @@ import { notifyWindows } from './windows-notify.mjs';
 import { createHealthMonitor, startHealthMonitor, telegramAlertChannel, windowsAlertChannel, formatTestAlert } from './health-alert.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, relayController, settingsStore, reviewStore, dataDirectory, autostartStore, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, healthAlerts = false, notify = notifyWindows, port = 18765, token = randomBytes(32).toString('hex') }) {
+export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, onShutdown = () => {}, relayController, settingsStore, reviewStore, dataDirectory, autostartStore, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, healthAlerts = false, notify = notifyWindows, port = 18765, token = randomBytes(32).toString('hex') }) {
 service.on('error', () => {});
 const device = lineDevice();
 const state = { device: device.id, phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
@@ -106,6 +106,14 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await operation(() => reviewStore.list()));
     }
     if (req.method !== 'POST') return send(res, 404, { error: '找不到操作' });
+    // Graceful exit for upgrades and the tray: only while the relay is stopped and nothing is in progress.
+    if (req.url === '/api/server/shutdown') {
+      await requireStopped();
+      if (qrAbort || !['idle', 'connected', 'login_required', 'failed'].includes(state.phase)) throw new HttpError(409, '登入或授權進行中，請完成後再關閉服務');
+      send(res, 202, { accepted: true });
+      setImmediate(() => onShutdown());
+      return;
+    }
     if (req.url === '/api/login/qr/cancel') {
       if (!qrAbort) return send(res, 409, { error: '目前沒有可取消的 QR 登入' });
       qrAbort.abort(); state.qr = ''; state.pin = ''; state.phase = 'cancelling';
@@ -481,7 +489,7 @@ guardProtocol(LineClient);
 const { LineProtocolService } = await import('./node_modules/@rikaidev/yomi/dist/line/core/service.js');
 const { runPwlessLogin } = await import('./node_modules/@rikaidev/yomi/dist/cli/login.js');
 const { runQrLogin } = await import('./qr-login.mjs');
-const server = createProbeServer({ service: guardLineSession(new LineProtocolService()), runPwlessLogin, runQrLogin, prepareRestart: prepareDeviceRestart, onRestarted: () => process.exit(0), relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir, autostartStore: createAutostartStore(process.env.LOCALAPPDATA, { apply: applyAutostartShortcuts }), healthAlerts: true });
+const server = createProbeServer({ service: guardLineSession(new LineProtocolService()), runPwlessLogin, runQrLogin, prepareRestart: prepareDeviceRestart, onRestarted: () => process.exit(0), onShutdown: () => { server.close(() => process.exit(0)); server.closeIdleConnections?.(); setTimeout(() => process.exit(0), 3000).unref(); }, relayController: createRelayController(), settingsStore: createSettingsStore(dataDir), reviewStore: createDeliveryReviewStore(dataDir), dataDirectory: dataDir, autostartStore: createAutostartStore(process.env.LOCALAPPDATA, { apply: applyAutostartShortcuts }), healthAlerts: true });
 server.on('error', () => { print('Local server could not start; check port 18765.'); process.exitCode = 1; });
 await stagedListen(server, lineDevice().id);
 await seedFromInstallerTask(process.env.LOCALAPPDATA, { apply: applyAutostartShortcuts }).catch(() => print('Could not seed the installer autostart choice; enable it on the page instead.'));
