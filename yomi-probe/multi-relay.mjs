@@ -16,6 +16,7 @@ import { sourceReply, destinationReply } from './reply-links.mjs';
 import { sendLineMedia, downloadLineMedia, normalizeLineMessage } from './line-media.mjs';
 import { mediaRejection, mediaNotice, payloadVersion, needsDownload } from './media-payload.mjs';
 import { splitTextChunks } from './text-chunk.mjs';
+import { createDedupeWindow } from './content-dedupe.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -39,6 +40,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
   if (!Number.isSafeInteger(queueLimit) || queueLimit < 1 || !Number.isSafeInteger(deliveryBudget) || deliveryBudget < 1) throw new Error('Invalid queue limits');
   const cursors = new Map();
   const cooldowns = new Map(), cooldownNotes = new Map();
+  const dedupe = createDedupeWindow();
   const reading = new Set(), delivering = new Set();
   const attemptedDestinations = new Set();
   const outputFile = path.join(directory, 'lineport-output.jsonl');
@@ -52,11 +54,11 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
   for (const rule of config.rules.filter(rule => rule.enabled)) for (const source of rule.sources) for (const destination of rule.destinations) {
     const sourceKey = endpointKey(source), destinationKey = endpointKey(destination);
     const status = { key: digest([sourceKey, destinationKey]).slice(0, 24), ruleId: rule.id, name: rule.name, source, destination,
-      phase: 'starting', stage: 'baseline', forwarded: 0, uncertain: 0, errors: 0, skipped: 0, pending: 0, lastSend: null, warning: '' };
+      phase: 'starting', stage: 'baseline', forwarded: 0, uncertain: 0, errors: 0, skipped: 0, deduplicated: 0, pending: 0, lastSend: null, warning: '' };
     state.routes.push(status);
     const edge = { rule, source, destination, status, seen: new Set(), startedAt: now() };
     edges.push(edge);
-    if (!sources.has(sourceKey)) sources.set(sourceKey, { endpoint: source, edges: [], polls: 0, lastPoll: null, received: 0, decryptFailed: 0, warning: '', failures: 0, retryAt: 0 });
+    if (!sources.has(sourceKey)) sources.set(sourceKey, { endpoint: source, edges: [], polls: 0, lastPoll: null, received: 0, decryptFailed: 0, warning: '', failures: 0, retryAt: 0, lastNewAt: now() });
     sources.get(sourceKey).edges.push(edge);
     try {
       status.stage = 'platform';
@@ -115,12 +117,25 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
   function refresh() {
     for (const key of ['forwarded', 'uncertain', 'errors']) state[key] = edges.reduce((sum, edge) => sum + edge.status[key], 0);
     state.errors += [...sources.values()].reduce((sum, source) => sum + source.failures, 0);
-    state.sources = [...sources.values()].map(source => ({ ...source.endpoint, polls: source.polls, lastPoll: source.lastPoll, received: source.received, decryptFailed: source.decryptFailed, warning: source.warning,
-      consecutiveErrors: source.consecutiveErrors || 0, loginRequired: Boolean(source.loginRequired) }));
+    state.sources = [...sources.entries()].map(([key, source]) => ({ ...source.endpoint, polls: source.polls, lastPoll: source.lastPoll, received: source.received, decryptFailed: source.decryptFailed, warning: source.warning,
+      consecutiveErrors: source.consecutiveErrors || 0, loginRequired: Boolean(source.loginRequired), pollIntervalMs: pollDelay(key) }));
     state.phase = edges.every(edge => ['failed', 'blocked'].includes(edge.status.phase)) ? 'failed'
       : edges.some(edge => edge.status.phase !== 'running' || edge.status.warning) || [...sources.values()].some(source => source.warning && !source.historyOnly) ? 'degraded' : 'running';
     state.warning = state.phase === 'running' ? '' : '部分路線受阻，請查看各路線與來源狀態';
     state.stage = 'waiting';
+  }
+  // LINE reads cost a protocol request each; slow down when nothing is happening, never when something is.
+  function pollDelay(key) {
+    const source = sources.get(key);
+    if (!source || source.endpoint.platform !== 'line') return 3000;
+    const time = now(), live = source.edges.filter(edge => edge.status.phase === 'running');
+    if (!live.length) return 3000;
+    const idle = time - (source.lastNewAt || time);
+    if (idle < 10 * 60000) return 3000;
+    if (live.every(edge => edge.rule.schedule && !inSchedule(edge.rule.schedule, time))) return 30000;
+    const minute = Math.floor((time + 8 * 3600000) / 60000) % 1440;
+    if (minute >= 60 && minute < 360) return 30000; // 01:00-06:00 Asia/Taipei
+    return idle < 30 * 60000 ? 10000 : 15000;
   }
   refresh();
   async function tick({ sourceKeys = [...sources.keys()], deliver = true } = {}) {
@@ -171,6 +186,8 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         source.historyOnly = false;
         const filtered = messages.filter(message => !outputs.has(`${adapters[source.endpoint.platform].identity}:${key}:${message.id}`));
         batches.set(key, filtered);
+        // Any message some live route has not handled yet counts as activity for adaptive polling.
+        if (live.some(edge => unseenText(filtered, edge.seen, edge.startedAt, edge.rule.media).length)) source.lastNewAt = now();
         for (const edge of live) {
           edge.status.lastRead = inspectRelayRead(filtered, edge.seen, edge.startedAt, edge.rule.media);
           const candidates = unseenText(filtered, edge.seen, edge.startedAt, edge.rule.media);
@@ -205,6 +222,11 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
           const id = String(message.id), text = matchingContent(edge.rule, message, endpointKey(edge.source), edge.source);
           if (text === null) {
             await edge.record({ id, outcome: 'baseline' }); edge.seen.add(id); edge.status.skipped++; continue;
+          }
+          // Opt-in: the same announcement from another source already went to this destination recently.
+          if (edge.rule.dedupe && typeof text === 'string' && !message.media
+            && dedupe.duplicate(endpointKey(edge.destination), message.text, Number(message.createdTime || message.deliveredTime), edge.rule.dedupe.windowMinutes * 60000)) {
+            await edge.record({ id, outcome: 'baseline' }); edge.seen.add(id); edge.status.skipped++; edge.status.deduplicated++; continue;
           }
           let content = text;
           // Attachments that provably exceed this destination's limits become a visible notice instead.
@@ -340,7 +362,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     }
     refresh();
   }
-  return { state, tick, sourceKeys: [...sources.keys()] };
+  return { state, tick, pollDelay, sourceKeys: [...sources.keys()] };
 }
 
 export async function createLineRelayAdapter(service, endpoints, { downloadPhoto, downloadMedia = downloadPhoto } = {}) {
@@ -457,7 +479,7 @@ export async function runMultiRelay(state, directory, { createLineService }) {
   async function poll(sourceKeys) {
     try { await relay.tick({ sourceKeys }); Object.assign(state, relay.state); }
     catch { state.phase = 'failed'; state.stage = 'journal'; state.errors++; return; }
-    setTimeout(() => void poll(sourceKeys), 3000);
+    setTimeout(() => void poll(sourceKeys), sourceKeys.length === 1 ? relay.pollDelay(sourceKeys[0]) : 3000);
   }
   for (const key of relay.sourceKeys) void poll([key]);
   // Recover persisted queues even while every source is offline.

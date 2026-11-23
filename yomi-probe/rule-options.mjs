@@ -35,7 +35,12 @@ export function normalizeOptions(rule, sources, destinations) {
   if (rule.media && (sources.some(value => !['telegram', 'line'].includes(value.platform)) || destinations.some(value => !['telegram', 'line', 'discord'].includes(value.platform)))) invalid('附件需使用 LINE 或 Telegram 來源，目的可選 LINE、Telegram 或 Discord');
   if (rule.media && rule.replies && destinations.some(value => value.platform === 'line')) invalid('送往 LINE 的圖片／檔案目前不能保留回覆關聯，請關閉回覆或拆分規則');
   if (rule.replies !== undefined && typeof rule.replies !== 'boolean') invalid('回覆關聯設定需為開啟或關閉');
-  return { senderAllowlist, ...(Object.keys(senderAliases).length ? { senderAliases } : {}), schedule, media: rule.media === true, replies: rule.replies === true };
+  let dedupe = null;
+  if (rule.dedupe != null) {
+    if (typeof rule.dedupe !== 'object' || Array.isArray(rule.dedupe) || !Number.isInteger(rule.dedupe.windowMinutes) || rule.dedupe.windowMinutes < 1 || rule.dedupe.windowMinutes > 1440) invalid('跨來源去重的時間窗需為 1–1,440 分鐘');
+    dedupe = { windowMinutes: rule.dedupe.windowMinutes };
+  }
+  return { senderAllowlist, ...(Object.keys(senderAliases).length ? { senderAliases } : {}), schedule, media: rule.media === true, replies: rule.replies === true, ...(dedupe ? { dedupe } : {}) };
 }
 export function inSchedule(schedule, timestamp) {
   if (!schedule) return true;
