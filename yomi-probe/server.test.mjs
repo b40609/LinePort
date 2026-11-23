@@ -216,7 +216,8 @@ test('home has nonce CSP, no-store and no unresolved placeholders', async t => {
   assert.equal(result.headers['cache-control'], 'no-store');
   assert.ok(!result.body.includes('__TOKEN__') && !result.body.includes('__NONCE__'));
   assert.match(result.body, /v1\.1\.0 · LINE · Telegram/);
-  assert.match(result.body, /releases\/tag\/v1\.1\.0/);
+  assert.match(result.body, /id="checkUpdate"/);
+  assert.ok(result.body.includes('href="https://github.com/b40609/LinePort/releases"'));
 });
 test('isolated HTTP download, backup validation and restore preserve pre-restore settings', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-api-acceptance-'));
@@ -402,6 +403,17 @@ test('relay start and stop record the intent the watchdog honours', async t => {
   assert.equal((await call('/api/relay/stop')).status, 202);
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(intents, ['running', 'stopped']);
+});
+
+test('update check is a token-protected GET that only reports versions', async t => {
+  let calls = 0;
+  const { call } = await setup(t, {}, undefined, undefined, undefined, undefined, undefined, undefined, { updateCheck: async () => { calls++; return { current: '1.1.0', latest: '1.2.0', newer: true, url: 'https://github.com/b40609/LinePort/releases/tag/v1.2.0' }; } });
+  assert.equal(calls, 0, 'nothing is checked automatically');
+  const reply = await call('/api/update/check', undefined, {}, 'GET');
+  assert.equal(reply.status, 200);
+  assert.deepEqual(JSON.parse(reply.body), { current: '1.1.0', latest: '1.2.0', newer: true, url: 'https://github.com/b40609/LinePort/releases/tag/v1.2.0' });
+  assert.equal((await call('/api/update/check', undefined, { 'X-Probe-Token': 'wrong' }, 'GET')).status, 403);
+  assert.equal(calls, 1);
 });
 
 test('graceful shutdown requires the page token and a stopped relay, then calls onShutdown once', async t => {

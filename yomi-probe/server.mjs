@@ -21,6 +21,7 @@ import { createTelegramClient, createTelegramInbox, telegramMessage } from './te
 import { telegramThreadId, telegramChatEndpoint, telegramDestinations, createTopicEndpoint } from './telegram-topics.mjs';
 import { previewRules, settingsBackup, validateBackup, backupHealthAlert, safeDiagnostics } from './user-tools.mjs';
 import { createDeliveryReviewStore } from './delivery-review.mjs';
+import { checkForUpdate } from './update-check.mjs';
 import { storageHealth, privateSnapshot } from './storage-health.mjs';
 import { compactStorage } from './compaction.mjs';
 import { recentSenders, lineSourceSenders } from './source-senders.mjs';
@@ -29,7 +30,7 @@ import { notifyWindows } from './windows-notify.mjs';
 import { createHealthMonitor, startHealthMonitor, telegramAlertChannel, windowsAlertChannel, formatTestAlert } from './health-alert.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, onShutdown = () => {}, relayController, settingsStore, reviewStore, dataDirectory, autostartStore, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, healthAlerts = false, notify = notifyWindows, port = 18765, token = randomBytes(32).toString('hex') }) {
+export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, onShutdown = () => {}, relayController, settingsStore, reviewStore, dataDirectory, autostartStore, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, healthAlerts = false, notify = notifyWindows, updateCheck = checkForUpdate, port = 18765, token = randomBytes(32).toString('hex') }) {
 service.on('error', () => {});
 const device = lineDevice();
 const state = { device: device.id, phase: 'idle', connected: false, busy: false, pin: '', error: '', reads: 0, messages: 0, readable: 0, decryptFailed: 0, checkedAt: null };
@@ -100,6 +101,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/api/settings/backup' && settingsStore) return send(res, 200, settingsBackup(await settingsStore.load(), await settingsStore.healthAlert?.()));
     if (req.method === 'GET' && req.url === '/api/health-alert' && settingsStore?.healthAlert) return send(res, 200, { healthAlert: await settingsStore.healthAlert(), telegramConfigured: Boolean(await settingsStore.telegramToken()) });
     if (req.method === 'GET' && req.url === '/api/diagnostics') return send(res, 200, safeDiagnostics(relayController ? await relayController.status() : {}, state.connected));
+    // Manual only: the page calls this when the user presses the button; nothing is downloaded.
+    if (req.method === 'GET' && req.url === '/api/update/check') return send(res, 200, await updateCheck());
     if (req.method === 'GET' && req.url === '/api/storage' && dataDirectory) return send(res, 200, await storageHealth(dataDirectory));
     if (req.method === 'GET' && req.url === '/api/delivery/review' && reviewStore) {
       await requireStopped();

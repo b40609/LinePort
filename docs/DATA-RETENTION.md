@@ -45,3 +45,26 @@
 若日後遷移，建議步驟：一個資料庫檔、每配對一張 seen 表（主鍵 ID）與一張事件表；啟動時從 JSONL 一次匯入並以本版的語意比對驗證；遷移後保留 JSONL 為唯讀封存；交易內寫入取代逐列 fsync，`synchronous=FULL`；以單一程序鎖避免多份轉送同時開啟。
 
 SHA-256 驗證只證明複本與清單一致，不是來源身分驗證或完整備份。CLI 僅唯讀核對；不提供還原封存覆寫真實資料的按鈕。
+
+## LINE 登入憑證 DPAPI 評估：本版不實作
+
+2026-11-23 讀過 `@rikaidev/yomi` 0.5.0 的 `dist/auth/credential-store.js`、`dist/line/core/service.js`、`dist/util/data-dir.js`。
+
+**現況**：Windows 上 Yomi 把 LINE 登入（auth token、certificate、refresh token、mid、自己的 E2EE NaCl 金鑰對）存成一個明文 JSON：`%APPDATA%\yomi\line-credentials.json`。旁邊的 `line-e2ee-cache.json` 只放對方公鑰等可重算快取。LinePort 沒有設定 `YOMI_DATA_DIR`，所以這個目錄和使用者另外安裝的 Yomi MCP／Yomi Desktop 共用。
+
+**可行的切入點**：`LineProtocolService` 接受 `options.credentialStore`，可以注入繼承 `CredentialStore` 的子類別，覆寫 `readPersistedBlob`／`persistBlob`，用 CurrentUser DPAPI 加解密（沿用 `dpapi.mjs`，換專用 entropy）。不需要修改 node_modules。
+
+**本版不實作的原因**：
+
+- **兩個程序共用同一檔**：本機頁（18765）與轉送程序（18766）各自 `new LineProtocolService()`。換 token 時 `save(mutatePersisted)` 每次都重讀磁碟以合併另一程序的寫入。兩邊必須同時升級成同一格式，任一邊（含 `versions\` 裡的舊版、watchdog 啟動的舊版）讀到密文都會當成沒有登入。
+- **降版或與 Yomi 共用即失效**：舊版 LinePort 與 Yomi MCP／Desktop 只會讀明文 JSON。讀到密文時，`hydrateCacheFromBlob` 會得到空的工作階段，需要重新掃 QR。自己的 E2EE 金鑰對一旦遺失，新登入會產生新金鑰，舊群組金鑰與歷史訊息可能無法再解密（待驗證）。
+- **Yomi 的寫入本身不是原子操作**：`persistBlob` 直接 `writeFile`，失敗只印 `console.error`。加密後若在寫到一半時中斷，連「人工修復 JSON」都不可能，必須另外做暫存檔、fsync、更名與備份，等於重寫一份憑證儲存。
+- **效益有限**：DPAPI CurrentUser 擋不住同一使用者的惡意程式（它們同樣能呼叫 DPAPI），主要只防離線複製磁碟或備份。資料目錄已經限制只有目前使用者與 SYSTEM 可讀。
+- 每次讀取都要啟動一次 PowerShell 解密（約 0.3–1 秒，未實測精確值），會發生在 `resumeSession` 與換 token 的關鍵路徑上。
+
+**日後要做的建議步驟**：
+
+1. 先把 LinePort 的 Yomi 資料目錄改到 `%LOCALAPPDATA%\LinePort\yomi`（設定 `credentialPath`），與 Yomi 本體分開。首次啟動時複製舊檔，並保留原檔。
+2. 注入 DPAPI 子類別：寫入時先寫暫存檔、fsync 再更名；讀取時用快取的 mtime 減少解密次數；兩個程序同版才啟用，並在檔頭標記 `{"lineport":"dpapi-v1"}`。
+3. 遷移時保留明文 `.bak` 到使用者確認新登入可用（成功接收一則訊息）。降版保護沿用現有的 autostart 降版檢查，讓舊版拒絕啟動，而不是把密文誤判為未登入。
+4. 補測試：兩程序交錯換 token、寫入中斷、密文損壞、換 Windows 使用者、降版。全部用暫存目錄與假 DPAPI。
