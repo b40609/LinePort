@@ -3,7 +3,7 @@ import { HttpError } from './local-http.mjs';
 import { inSchedule } from './rule-options.mjs';
 import { RelayError, safeRelayStage, safeDestinationFailureReason } from './relay-health.mjs';
 import { mediaRejection, mediaNotice, needsDownload } from './media-payload.mjs';
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.2.0';
 
 export function previewRules(input) {
   const config = normalizeConfig(input.config);
