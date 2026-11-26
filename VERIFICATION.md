@@ -1,6 +1,6 @@
 # 驗證紀錄
 
-目前主要程式為 yomi-probe。v0.8.3（2026-10-10）全套 161 項 Mock 測試通過，npm 已知依賴漏洞掃描 0；包含指定發訊者、排程、媒體、Discord、積壓、程序中止、磁碟失敗及合成 Token 的 Windows DPAPI。[本版詳細證據與限制](yomi-probe/VERIFICATION.md)。以下為早期 C# 工具紀錄。
+目前主要程式為 `yomi-probe`（**v1.2.0** 及 2026-11-27 可靠性／監控修正）。全套離線模擬與整合測試、發版對帳閘門及最新詳細證據與限制請見 [yomi-probe/VERIFICATION.md](yomi-probe/VERIFICATION.md)。以下保留 2026-10-01 早期 C# 原型診斷工具之歷史紀錄。
 
 執行日期：2026-10-01。環境：Windows 11 build 26200，.NET SDK 10.0.204。
 

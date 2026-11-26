@@ -21,7 +21,7 @@ async function getCachedFreeBytes(dir) {
   diskFreeCache.set(dir, { time: now, freeBytes });
   return freeBytes;
 }
-const included = name => /^(?:lineport-(?:route-[a-f0-9]{64}|review-[a-f0-9]{64}|telegram-inbox-\d+|output)\.jsonl|lineport-rules\.json|relay-(?:[a-f0-9]{24}|source1-destination2)\.jsonl)$/.test(name);
+const included = name => /^(?:lineport-(?:route-[a-f0-9]{64}|review-[a-f0-9]{64}|telegram-inbox-\d+|output|failures|alerts)\.jsonl|lineport-rules\.json|relay-(?:[a-f0-9]{24}|source1-destination2)\.jsonl)$/.test(name);
 async function hashFile(file) {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(file)) hash.update(chunk);

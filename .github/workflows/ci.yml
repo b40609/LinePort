@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  test-and-verify:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: yomi-probe/package-lock.json
+
+      - name: Install dependencies (ignore-scripts)
+        working-directory: yomi-probe
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run offline unit and integration tests
+        working-directory: yomi-probe
+        run: npm test
+
+      - name: Run release & documentation readiness gate
+        working-directory: yomi-probe
+        run: node verify-release.mjs --ci

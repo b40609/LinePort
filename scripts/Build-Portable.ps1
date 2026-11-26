@@ -6,14 +6,21 @@ $output = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $output | Out-Null
 Push-Location $root
 try {
-    # Explicit Git inventory excludes login data, node_modules and generated files.
-    $files = @(git ls-files --cached --others --exclude-standard -- yomi-probe)
+    # Explicit Git inventory excludes untracked files, tests, internal verification notes and dev mocks.
+    $excludedNames = @('VERIFICATION.md', 'README.md', 'ui-mock.mjs', 'test-relay.mjs', 'verify-release.mjs')
+    $files = @(git ls-files --cached -- yomi-probe | Where-Object {
+        $leaf = Split-Path $_ -Leaf
+        ($leaf -notlike '*.test.mjs') -and ($leaf -notin $excludedNames)
+    })
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read source inventory.' }
     foreach ($file in $files) {
         $destination = Join-Path $output $file
         New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $root $file) -Destination $destination
     }
+    $headCommit = (git rev-parse HEAD).Trim()
+    $pkgVersion = (Get-Content -LiteralPath (Join-Path $output 'yomi-probe/package.json') -Raw | ConvertFrom-Json).version
+    @{ commit = $headCommit; version = $pkgVersion } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $output 'yomi-probe/build-info.json') -Encoding UTF8
     New-Item -ItemType Directory -Path (Join-Path $output 'runtime') | Out-Null
     $node = (Get-Command node.exe -ErrorAction Stop).Source
     Copy-Item -LiteralPath $node -Destination (Join-Path $output 'runtime/node.exe')
@@ -57,5 +64,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $root $notice) -Destination (Join-Path $output $notice)
     }
     & (Join-Path $output 'runtime/node.exe') --version | Set-Content -LiteralPath (Join-Path $output 'runtime/VERSION.txt')
+    & (Join-Path $output 'runtime/node.exe') (Join-Path $root 'yomi-probe/verify-release.mjs') --ci --portable $output
+    if ($LASTEXITCODE -ne 0) { throw 'Release readiness verification failed.' }
     Write-Output "Portable package ready: $output"
 } finally { Pop-Location }

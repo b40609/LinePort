@@ -74,24 +74,24 @@
 - 全套單元測試 `npm test`：294 項全部通過、0 失敗、0 跳過。
 - 前置備份至 `%LOCALAPPDATA%/LinePort/backups/hotfix-topics-20261029-162137`。
 - 熱更新同步 5 個修改檔案至安裝目錄 `%LOCALAPPDATA%/Programs/LinePort/versions/1.0.0-rc.3-20261029124805/yomi-probe/`。
-- 服務以常駐模式重新啟動於 `http://127.0.0.1:18765/`。規則目標群組 `-100xxxxxxxxxx`、話題 `12345`（LinePort轉發專區）已確認寫入並生效。
+- 服務以常駐模式重新啟動於 `http://127.0.0.1:18765/`。規則目標群組 `-100XXXXXXXXXX`、話題 `<topic_id>`（已遮罩）已確認寫入並生效。
 - LINE 端目前為 `login_required`，需由使用者開啟前端掃碼授權完成最後驗收。
 
-## 歷史：Telegram 話題選擇已安裝並套用 12345，轉送已恢復（2026-10-29，台灣）
+## 歷史：Telegram 話題選擇已安裝並套用指定話題，轉送已恢復（2026-10-29，台灣）
 
-使用者續授權更新安裝版、套用話題 ID `12345`，並要求前端可選話題。已打包本機 `1.0.0-rc.3` 版本並以靜默安裝更新，桌面捷徑指向 `%LOCALAPPDATA%/Programs/LinePort/versions/1.0.0-rc.3-20261029124805/LinePort.exe`。安裝套件自我驗證通過，套件內附 runtime 的明確 `*.test.mjs` 測試集 292 項通過；沒有發布新 Git tag 或 GitHub 資產。
+使用者續授權更新安裝版、套用指定話題 ID `<topic_id>`，並要求前端可選話題。已打包本機 `1.0.0-rc.3` 版本並以靜默安裝更新，桌面捷徑指向 `%LOCALAPPDATA%/Programs/LinePort/versions/1.0.0-rc.3-20261029124805/LinePort.exe`。安裝套件自我驗證通過，套件內附 runtime 的明確 `*.test.mjs` 測試集 292 項通過；沒有發布新 Git tag 或 GitHub 資產。
 
-新版介面服務已運作於 18765。切換後讀到的 IOSIPAD 設定較舊，未能定位原服務設定檔來源；已從停機前 API 回應重建原規則，正規化後 SHA256 與原回應 revision `3b9b2d672a81a45df0629edf64cf26c048579fc9cc5daae7201a570187b6d7e5` 完全相符。透過設定還原 API 備份目前設定並套用原規則，唯一業務變更為 Telegram `-100xxxxxxxxxx` 目的加入 `threadId:12345`、設定格式升為 2；LINE 目的、來源、指定人員及關鍵字保留。Telegram getChat 確認同群組已啟用話題，但不能確認該話題 ID 存在。
+新版介面服務已運作於 18765。切換後讀到的 IOSIPAD 設定較舊，未能定位原服務設定檔來源；已從停機前 API 回應重建原規則，正規化後 SHA256 與原回應 revision `3b9b2d672a81a45df0629edf64cf26c048579fc9cc5daae7201a570187b6d7e5` 完全相符。透過設定還原 API 備份目前設定並套用原規則，唯一業務變更為 Telegram `-100XXXXXXXXXX` 目的加入指定 `threadId`、設定格式升為 2；LINE 目的、來源、指定人員及關鍵字保留。Telegram getChat 確認同群組已啟用話題，但不能確認該話題 ID 存在。
 
-備份與部署紀錄位於 `%LOCALAPPDATA%/LinePort/backups/topics-20261029-12345`。`lineport-rules-before.json` 是磁碟上的較舊設定，`live-rules-observed-before.json` 才是重建並驗證雜湊的停機前原規則；`settings-before.json` 與還原 API 自動備份保存取代前設定。舊安裝版本完整保留。既有 autostart-service/relay.ps1 的 launcher 位置已更新至新 EXE，原腳本及 Startup 捷徑已備份，未刪除捷徑。
+備份與部署紀錄位於 `%LOCALAPPDATA%/LinePort/backups/topics-20261029-masked`。`lineport-rules-before.json` 是磁碟上的較舊設定，`live-rules-observed-before.json` 才是重建並驗證雜湊的停機前原規則；`settings-before.json` 與還原 API 自動備份保存取代前設定。舊安裝版本完整保留。既有 autostart-service/relay.ps1 的 launcher 位置已更新至新 EXE，原腳本及 Startup 捷徑已備份，未刪除捷徑。
 
-Headless Chromium 對實際安裝版驗證規則摘要與「發送話題」選單均顯示並選中 `12345`，375px 無水平溢出、頁面錯誤 0；未保存測試編輯或發送訊息。更新後 LINE 一度回報 `login_required`；使用者回覆「已登入」後，核對 IOSIPAD connected=true、busy=false、規則版本 2 及話題目的正確，以 `/api/relay/start` `{useRules:true}` 恢復轉送。介面與實際轉送服務皆回報 running；LINE 與 Telegram 兩路線 running/waiting，待送、不明與錯誤均 0，原始服務狀態確認 Telegram destination.threadId=12345。Telegram 話題路線 forwarded=0，尚無新訊息送達話題的實機驗收；未自行發送測試訊息。LINE 路線 forwarded=1 是服務回報的累積值，不作本輪新收件證據。
+Headless Chromium 對實際安裝版驗證規則摘要與「發送話題」選單均顯示並選中指定話題 ID，375px 無水平溢出、頁面錯誤 0；未保存測試編輯或發送訊息。更新後 LINE 一度回報 `login_required`；使用者回覆「已登入」後，核對 IOSIPAD connected=true、busy=false、規則版本 2 及話題目的正確，以 `/api/relay/start` `{useRules:true}` 恢復轉送。介面與實際轉送服務皆回報 running；LINE 與 Telegram 兩路線 running/waiting，待送、不明與錯誤均 0，原始服務狀態確認 Telegram destination.threadId 已設定。Telegram 話題路線 forwarded=0，尚無新訊息送達話題的實機驗收；未自行發送測試訊息。LINE 路線 forwarded=1 是服務回報的累積值，不作本輪新收件證據。
 
 恢復後持續輪詢出現來源歷史提示：早於啟動基準的訊息已略過，因此整體 phase=degraded；兩條路線仍 running/waiting、待送／不明／錯誤皆 0、解密失敗 0，非發送失敗。電腦 UTC 與 clock 工具時間相差約 1 秒。沒有清除紀錄、修改時鐘或回補舊訊息；等待符合原規則的新訊息確認收件。
 
 ## 歷史：Telegram 話題選擇整合原始碼（2026-10-29，台灣）
 
-使用者授權將「Telegram 話題選擇」整合進轉發規則，並提供候選話題 ID `12345`。已新增觀察到的話題清單、手動群組 ID＋話題 ID、規則目的「發送話題」選單，保存、編輯、重新載入、備份與還原均保留話題。文字、圖片、檔案及回覆都傳入 `message_thread_id`；缺少或不符話題的回應暫停路線，不降級改送群組預設位置。話題來源篩選尚未提供，來源仍為整個聊天室。
+使用者授權將「Telegram 話題選擇」整合進轉發規則，並提供候選話題 ID `<topic_id>`。已新增觀察到的話題清單、手動群組 ID＋話題 ID、規則目的「發送話題」選單，保存、編輯、重新載入、備份與還原均保留話題。文字、圖片、檔案及回覆都傳入 `message_thread_id`；缺少或不符話題的回應暫停路線，不降級改送群組預設位置。話題來源篩選尚未提供，來源仍為整個聊天室。
 
 各話題獨立保存待送、去重與回覆對照；同群共用發送間隔與防回流保護。含話題規則保存為設定格式第 2 版，舊版會拒絕載入，避免忽略話題誤送。新話題視為新路線並略過首次歷史基準。API 無完整話題清單入口，載入僅列 Bot 尚未確認更新中觀察到的話題；手動加入僅確認群組開啟話題，不驗證話題本身存在。
 

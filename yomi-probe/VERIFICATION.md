@@ -1,21 +1,47 @@
-## 2026-10-29：v1.0.0 正式版（功能整合、桌面客戶端、Cloudflare 安全審查加固與打包發布）
+## 2026-11-27：v1.2.0 優化檢視修正（失敗分類、單次加註自動重送、監控補洞與發版閘門）
+
+1. **可靠性與傳遞語意修正（LP-03、LP-X-01、LP-04、D6(a)、LP-06、LP-07）**：
+   - 區分「確定未送出」（送出前本機檢查失敗、平台 401／403／400 聊天室或權限拒絕）與「發送結果不明」，以 `retry` 列消解 `sending` 並暫停路線，不產生假的人工核對項，修復後重啟原樣續送；HTTP 5xx 維持不明。
+   - 附件準備（下載）暫時失敗改為 5 秒起倍增（上限 5 分鐘）退避重試，連續 6 次失敗才轉為 `failed`。
+   - 依使用者 2026-11-27 決定（推翻舊版純文字不明不自動重送）：純文字首次發送結果不明時，等待後加註 `⚠️ 可能重複`（附原訊息時間）自動重送一次；重送仍不明才進入 `blocked` 並告警；附件維持首次不明即暫停。
+   - 長文分段間隔提高至 1.1 秒，並保護已送出首段後的 429 分支。
+2. **監控、看門狗與告警隔離（LP-02、LP-X-02、LP-X-03、LP-X-04、LP-07）**：
+   - `relay-controller.mjs` 與 `safeDiagnostics` 補齊 `quarantined`、`quarantinedSinceStart`、`quarantineIds`、`deduplicated`、`resent`、`retrying`、`failures` 與建置 `commit` 欄位，修復 `route_quarantined` 告警在正式路徑被剝除的問題。
+   - 新增連續 3 次 `stopped`／`unavailable` 的 `relay_down` 告警、看門狗斷路器告警、每日存活摘要（預設台北時間 09:00）、本機定量輪替告警紀錄（`lineport-alerts.jsonl`）與去識別化錯誤分類耗時紀錄（`lineport-failures.jsonl`）。
+   - `watchdog.ps1` 對連續 2 次 `unavailable`（事件迴圈卡死）先呼叫經驗證的 `stop-relay.ps1` 終止舊 worker 再重新拉起。
+   - 遠端告警預設關閉（僅本機紀錄與 Windows 通知），支援獨立告警 Bot（`alertBotToken`）與 HTTPS Webhook，並阻擋將告警送往被監控話題或共用轉送 Bot。
+3. **發版閘門、CI 與識別碼遮罩（LP-X-05、LP-X-06、LP-10、LP-15）**：
+   - 新增 `.github/workflows/ci.yml` 與 `verify-release.mjs`（含負樣本自測），遮罩追蹤檔內曾留存的群組與話題 ID，`Build-Portable.ps1` 排除測試檔並寫入 `build-info.json`。
+   - 尚未實機驗證項目：跨平台附件真實發送、安全壓縮在正式目錄之實際執行、Discord 目的端與跨來源去重。
+
+## 2026-11-24：v1.2.0 封裝發布（媒體附件、壓縮、Soft DLQ 與 C3 圖示）
+
+1. **自動化測試與封裝**：`df1fe98`（tag `v1.2.0`）全套 377 項離線測試通過；產出 `Setup.exe` 與 `Windows-x64.zip` 並升級本機安裝目錄，整合 C3 品牌圖示與系統匣動態狀態燈。
+2. **當時未完成之實機驗證（2026-11-26 交叉審查盤點補記）**：發版當下附件轉送、停止後安全壓縮與 Soft DLQ 單筆隔離在正式環境執行次數均為 0；`relay-controller.mjs` 漏列隔離欄位導致 `route_quarantined` 未生效（已於 2026-11-27 修復）。
+
+## 2026-11-23：v1.1.0 防無聲死亡機制與看門狗整合
+
+1. **實作內容**：提交 `1a045f1`、`e3f86d2`（註：當時本機漏打 `v1.1.0` git tag），整合健康告警、未建立連線網路錯誤（DNS／拒絕連線／TLS）指數退避重試、Windows 原生 Toast、自動啟動防降級鎖、看門狗排程 `LinePort-Service-Recovery` 與過舊安裝版本清理腳本 `prune-versions.ps1`。
+2. **限制**：看門狗與自動啟動均為 `LogonType=Interactive`，需登入 Windows 工作階段後運作。
+
+## 2026-10-29：v1.0.0 正式版（功能整合、桌面客戶端、安全檢查加固與打包發布）
 
 1. **自動化測試套件**：`npm test` 執行全部 37 個測試檔案，共 **308 項測試全數通過（308 pass, 0 fail, 0 skipped）**。涵蓋 Telegram 話題持久化與清單、超長文字智慧分段（`text-chunk.test.mjs`）、動態訊息模版與 AND / Regex 複合關鍵字（`text-template.test.mjs`, `text-feature.test.mjs`）、Windows 氣泡通知防抖與字元跳脫清理（`windows-notify.test.mjs`）。
-2. **Cloudflare Security-Audit 防禦性安全審查加固**：
+2. **防禦性安全檢查加固（依本機安全檢查清單，非外部認證）**：
    - `electron/main.cjs`：`setWindowOpenHandler` 與 `will-navigate` 強制檢驗 URL Scheme 白名單（僅允許 `http:` 與 `https:`），阻斷非預期系統協定呼叫。
    - `yomi-probe/windows-notify.mjs`：移除換行與 PowerShell 保留字元並限長 200 字元，消除子程序命令注入風險。
-   - `yomi-probe/text-chunk.mjs` & `text-template.mjs`：切片迴圈強制正數步進收斂，Regex 限制 Pattern 長度 <= 256 字元與取樣上限 20,000 字元，防範 ReDoS。
+   - `yomi-probe/text-chunk.mjs` & `text-template.mjs`：切片迴圈強制正數步進收斂，Regex 限制 Pattern 長度 <= 256 字元與取樣上限 20,000 字元。
 3. **打包與資產交付**：產出 `LinePort-v1.0.0-Windows-x64-Setup.exe`、`LinePort-v1.0.0-Desktop-Portable-x64.zip`、`LinePort-v1.0.0-Windows-x64.zip`、`LinePort-v1.0.0.zip` 與 `SHA256SUMS.txt` 並上傳至 GitHub Release `v1.0.0`。
 
 ## 2026-10-29：話題功能安裝、設定與實際前端驗證
 
 已建立 `dist/LinePort-v1.0.0-rc.3-topics-20261029` 及 `dist/release-v1.0.0-rc.3-topics-20261029/LinePort-v1.0.0-rc.3-Windows-x64-Setup.exe`，打包、自我驗證及靜默安裝成功；桌面捷徑指向安裝目錄 `1.0.0-rc.3-20261029124805`。套件內附 runtime 執行明確 `*.test.mjs` 測試檔：292 通過、0 失敗、0 跳過。曾誤用未指定檔案的 `node --test`，額外偵測到人工實機測試 `test-relay.mjs`，它因缺少 `--send-latest` 於載入登入資料及發送前安全退出；之後改用正式測試集通過，未發送測試訊息。
 
-停機前原服務規則以 API 回應重建，正規化 SHA256 與停機前 revision 完全相符。設定還原 API 先備份當前較舊設定，再還原原規則並加入 Telegram `threadId:12345`；保存後整份設定與預期正規化結果 deepEqual。getChat 確認目的群組為啟用話題的 supergroup，未發送訊息，也未驗證該 ID 存在。
+停機前原服務規則以 API 回應重建，正規化 SHA256 與停機前 revision 完全相符。設定還原 API 先備份當前較舊設定，再還原原規則並加入指定 Telegram `threadId`；保存後整份設定與預期正規化結果 deepEqual。getChat 確認目的群組為啟用話題的 supergroup，未發送訊息，也未驗證該 ID 存在。
 
-Headless Chromium 開啟實際安裝服務 18765，規則摘要與編輯器「發送話題」顯示 `12345`，選單值為 `telegram:-100xxxxxxxxxx:thread:12345`。1280px 與 375px 截圖已產生，375px 無水平溢出、頁面錯誤 0；只開啟編輯畫面，沒有保存測試修改。腳本 `lineport-installed-topic-ui.mjs` 及截圖置於 Windows Temp。
+Headless Chromium 開啟實際安裝服務 18765，規則摘要與編輯器「發送話題」顯示指定話題 ID，選單值為 `telegram:-100XXXXXXXXXX:thread:<topic_id>`（已遮罩）。1280px 與 375px 截圖已產生，375px 無水平溢出、頁面錯誤 0；只開啟編輯畫面，沒有保存測試修改。腳本 `lineport-installed-topic-ui.mjs` 及截圖置於 Windows Temp。
 
-使用者回覆「已登入」後，核對 `/api/status` connected=true、device=IOSIPAD、busy=false 及保存的話題 12345，以 `/api/relay/start` `{useRules:true}` 成功恢復轉送。介面 API 與 18766 實際服務均為 running，兩條路線 running/waiting、pending=0、uncertain=0、errors=0；原始狀態中的 Telegram destination.threadId=12345。Telegram forwarded=0，LINE 累積 forwarded=1，不宣稱本輪實際收件成功；未自行發送測試訊息。
+使用者回覆「已登入」後，核對 `/api/status` connected=true、device=IOSIPAD、busy=false 及保存的指定話題 ID，以 `/api/relay/start` `{useRules:true}` 成功恢復轉送。介面 API 與 18766 實際服務均為 running，兩條路線 running/waiting、pending=0、uncertain=0、errors=0；原始狀態中的 Telegram destination.threadId 已設定。Telegram forwarded=0，LINE 累積 forwarded=1，不宣稱本輪實際收件成功；未自行發送測試訊息。
 
 後續輪詢：來源提示「未處理訊息早於啟動基準，已略過」，整體變為 degraded；兩條路線仍 running/waiting，待送、不明、錯誤及來源解密失敗皆 0。來源持續輪詢，未改動跳過歷史的保護。電腦 UTC 與 clock 工具約差 1 秒，未變更時鐘或回補舊訊息。
 

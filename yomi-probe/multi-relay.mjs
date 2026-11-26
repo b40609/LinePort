@@ -459,12 +459,12 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             } catch (error) {
               const sendElapsed = now() - sendStart;
               if ((edge.destination.platform === 'telegram' && error instanceof TelegramRateLimit || edge.destination.platform === 'discord' && error instanceof DiscordRateLimit) && deliveredChunks === 0) {
-                await logFailure(edge, 'send', 'retry', error, sendElapsed);
-                settleAttempt(edge, id);
                 const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + error.retryAfterMs);
-                await edge.record({ id, outcome: 'retry', retryAt, failure: 'rate_limit' });
                 cooldowns.set(edge.destination.platform, retryAt);
                 cooldownNotes.delete(edge.destination.platform);
+                settleAttempt(edge, id);
+                await logFailure(edge, 'send', 'retry', error, sendElapsed);
+                await edge.record({ id, outcome: 'retry', retryAt, failure: 'rate_limit' });
                 status.stage = 'waiting';
                 break;
               }
@@ -477,13 +477,13 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
               // Only a request that provably never left this machine may be retried; any delivered chunk
               // means a retry would duplicate it without a notice, so that case falls through to uncertain.
               if (error?.unsent === true && deliveredChunks === 0) {
-                await logFailure(edge, 'send', 'retry', error, sendElapsed);
-                settleAttempt(edge, id);
                 edge.unsentFailures = (edge.unsentFailures || 0) + 1;
                 const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + Math.min(300000, 5000 * 2 ** Math.min(edge.unsentFailures - 1, 6)));
-                await edge.record({ id, outcome: 'retry', retryAt, failure: 'unsent', ...failureDetail(error) });
                 cooldowns.set(edge.destination.platform, retryAt);
                 cooldownNotes.set(edge.destination.platform, error.message);
+                settleAttempt(edge, id);
+                await logFailure(edge, 'send', 'retry', error, sendElapsed);
+                await edge.record({ id, outcome: 'retry', retryAt, failure: 'unsent', ...failureDetail(error) });
                 status.stage = 'waiting';
                 break;
               }
