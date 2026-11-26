@@ -1,9 +1,38 @@
+import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { normalizeConfig, normalizeHealthAlert, matchingContent, textRejection } from './route-config.mjs';
 import { HttpError } from './local-http.mjs';
 import { inSchedule } from './rule-options.mjs';
-import { RelayError, safeRelayStage, safeDestinationFailureReason } from './relay-health.mjs';
+import { RelayError, safeRelayStage, safeDestinationFailureReason, FAILURE_KINDS } from './relay-health.mjs';
 import { mediaRejection, mediaNotice, needsDownload } from './media-payload.mjs';
-export const APP_VERSION = '1.2.0';
+
+const defaultRoot = path.dirname(fileURLToPath(import.meta.url));
+export const APP_VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
+
+export function resolveBuildCommit(rootDir = defaultRoot) {
+  try {
+    const info = JSON.parse(readFileSync(path.join(rootDir, 'build-info.json'), 'utf8'));
+    if (typeof info?.commit === 'string' && /^[a-f0-9]{7,40}$/.test(info.commit)) return info.commit;
+  } catch {}
+  try {
+    const gitDir = path.join(rootDir, '..', '.git');
+    const head = readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+    if (/^[a-f0-9]{7,40}$/.test(head)) return head;
+    const match = /^ref:\s*(refs\/[\w./-]+)$/.exec(head);
+    if (!match || match[1].includes('..')) return 'unknown';
+    try {
+      const refCommit = readFileSync(path.join(gitDir, match[1]), 'utf8').trim();
+      if (/^[a-f0-9]{7,40}$/.test(refCommit)) return refCommit;
+    } catch {}
+    const packed = readFileSync(path.join(gitDir, 'packed-refs'), 'utf8');
+    for (const line of packed.split('\n')) {
+      const row = /^([a-f0-9]{40})\s+(\S+)$/.exec(line.trim());
+      if (row && row[2] === match[1]) return row[1];
+    }
+  } catch {}
+  return 'unknown';
+}
 
 export function previewRules(input) {
   const config = normalizeConfig(input.config);
@@ -67,14 +96,19 @@ export function validateBackup(backup) {
 // Allowlist only; do not export names, IDs, arbitrary errors, paths or free text.
 export function safeDiagnostics(relay, connected) {
   const count = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  const safeFailures = value => Object.fromEntries(FAILURE_KINDS.filter(k => Number.isSafeInteger(value?.[k]) && value[k] > 0).map(k => [k, value[k]]));
   const phases = new Set(['running', 'stopped', 'starting', 'degraded', 'failed', 'blocked', 'unavailable', 'legacy']);
-  return { format: 'lineport-diagnostics', version: 1, appVersion: APP_VERSION, exportedAt: new Date().toISOString(), lineConnected: connected === true,
+  return { format: 'lineport-diagnostics', version: 1, appVersion: APP_VERSION, commit: resolveBuildCommit(), exportedAt: new Date().toISOString(), lineConnected: connected === true,
     phase: phases.has(relay.phase) ? relay.phase : 'unavailable',
     stage: safeRelayStage(relay.stage),
     totals: Object.fromEntries(['forwarded', 'uncertain', 'errors', 'polls'].map(key => [key, count(relay[key])])),
-    routes: (Array.isArray(relay.routes) ? relay.routes : []).slice(0, 100).map((route, index) => ({ route: index + 1, phase: phases.has(route.phase) ? route.phase : 'unavailable',
-      stage: safeRelayStage(route.stage),
-      ...(['e2ee', 'transport'].includes(route.lineProtection) ? { lineProtection: route.lineProtection } : {}),
-      ...(route.stage === 'destination_e2ee' ? { failureReason: safeDestinationFailureReason(route.failureReason) } : {}),
-      ...Object.fromEntries(['forwarded', 'pending', 'uncertain', 'errors', 'skipped'].map(key => [key, count(route[key])])) })) };
+    routes: (Array.isArray(relay.routes) ? relay.routes : []).slice(0, 100).map((route, index) => {
+      const failures = safeFailures(route.failures);
+      return { route: index + 1, phase: phases.has(route.phase) ? route.phase : 'unavailable',
+        stage: safeRelayStage(route.stage),
+        ...(['e2ee', 'transport'].includes(route.lineProtection) ? { lineProtection: route.lineProtection } : {}),
+        ...(route.stage === 'destination_e2ee' ? { failureReason: safeDestinationFailureReason(route.failureReason) } : {}),
+        ...Object.fromEntries(['forwarded', 'pending', 'uncertain', 'errors', 'skipped', 'quarantined', 'deduplicated', 'resent', 'retrying'].map(key => [key, count(route[key])])),
+        ...(Object.keys(failures).length ? { failures } : {}) };
+    }) };
 }

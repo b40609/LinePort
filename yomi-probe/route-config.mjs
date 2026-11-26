@@ -72,17 +72,34 @@ export function normalizeConfig(input) {
   // Older releases reject version 2 instead of silently dropping a destination topic.
   return { version: rules.some(rule => rule.destinations.some(destination => destination.threadId !== undefined)) ? 2 : 1, rules };
 }
-// System health alerts reuse the saved Telegram Bot; only a destination chat is stored here.
+// System health alerts default to disabled (local log + Windows toast only); remote destinations must be independent.
 export const DEFAULT_HEALTH_ALERT = Object.freeze({ enabled: false, telegramChatId: '' });
+export function validAlertWebhookUrl(value) {
+  if (typeof value !== 'string' || !value || value.length > 500) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password && Boolean(parsed.hostname);
+  } catch { return false; }
+}
 export function normalizeHealthAlert(input) {
   if (input === undefined || input === null) return { ...DEFAULT_HEALTH_ALERT };
   if (typeof input !== 'object' || Array.isArray(input) || typeof input.enabled !== 'boolean') invalid('系統健康告警設定格式不正確');
   const chatId = input.telegramChatId === undefined ? '' : input.telegramChatId;
   if (typeof chatId !== 'string' || chatId && (!/^-?[1-9]\d{0,15}$/.test(chatId) || !Number.isSafeInteger(Number(chatId)))) invalid('告警 Telegram 聊天室 ID 必須是數字');
-  if (input.enabled && !chatId) invalid('啟用系統健康告警前，請填寫 Telegram 聊天室 ID');
+  const webhookUrl = input.webhookUrl === undefined ? '' : input.webhookUrl;
+  if (webhookUrl !== '' && !validAlertWebhookUrl(webhookUrl)) invalid('告警 Webhook 必須是有效的 HTTPS 網址，且不可在網址內嵌帳號密碼');
+  if (input.enabled && !chatId && !webhookUrl) invalid('啟用遠端系統健康告警前，請填寫獨立的 Telegram 聊天室 ID 或 HTTPS Webhook 網址');
   if (input.telegramThreadId !== undefined && input.telegramThreadId !== null && !telegramThreadId(input.telegramThreadId)) invalid('告警話題 ID 必須為 1–2147483647 的整數');
-  return { enabled: input.enabled, telegramChatId: chatId,
-    ...(telegramThreadId(input.telegramThreadId) ? { telegramThreadId: input.telegramThreadId } : {}) };
+  if (input.dailySummary !== undefined && typeof input.dailySummary !== 'boolean') invalid('每日存活摘要開關格式不正確');
+  if (input.dailySummaryHour !== undefined && (!Number.isSafeInteger(input.dailySummaryHour) || input.dailySummaryHour < 0 || input.dailySummaryHour > 23)) invalid('每日存活摘要時間必須為 0–23 的整數小時');
+  return {
+    enabled: input.enabled,
+    telegramChatId: chatId,
+    ...(telegramThreadId(input.telegramThreadId) ? { telegramThreadId: input.telegramThreadId } : {}),
+    ...(webhookUrl ? { webhookUrl } : {}),
+    ...(typeof input.dailySummary === 'boolean' ? { dailySummary: input.dailySummary } : {}),
+    ...(Number.isSafeInteger(input.dailySummaryHour) ? { dailySummaryHour: input.dailySummaryHour } : {}),
+  };
 }
 export function textRejection(rule, message, sourceKey, allowEmpty = false) {
   if (!senderMatches(rule, sourceKey, message)) return '非指定發訊者；請核對此來源的人員 ID';
@@ -122,6 +139,7 @@ export function createSettingsStore(directory, protectionOptions) {
   const topicsFile = path.join(directory, 'lineport-telegram-topics.json');
   const healthAlertFile = path.join(directory, 'lineport-health-alert.json');
   const telegram = botCredentials(directory, 'telegram', atomicJson, protectionOptions);
+  const alertTelegram = botCredentials(directory, 'alert-telegram', atomicJson, protectionOptions);
   const discord = botCredentials(directory, 'discord', atomicJson, protectionOptions);
   return {
     async load() {
@@ -167,6 +185,9 @@ export function createSettingsStore(directory, protectionOptions) {
     telegramToken: () => telegram.token(),
     saveTelegram: (token, useProtection = false) => telegram.save(token, useProtection),
     telegramProtected: () => telegram.protected(),
+    alertTelegramToken: () => alertTelegram.token(),
+    saveAlertTelegram: (token, useProtection = false) => alertTelegram.save(token, useProtection),
+    alertTelegramProtected: () => alertTelegram.protected(),
     discordToken: () => discord.token(),
     saveDiscord: (token, useProtection = false) => discord.save(token, useProtection),
     discordProtected: () => discord.protected(),

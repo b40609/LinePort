@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { createHash } from 'node:crypto';
-import { stat } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { stat, readFile, writeFile, rename } from 'node:fs/promises';
 import { appendRecord, loadJournal, establishBaseline } from './relay-core.mjs';
 import { unseenText } from './relay-rules.mjs';
 import { createSettingsStore, configRevision, endpointKey, chatKey, matchingContent, textRejection } from './route-config.mjs';
@@ -58,8 +58,20 @@ function failureDetail(error) {
 }
 // The platform answered with a client error, or a local check failed before any request: nothing was delivered.
 const definitelyNotSent = error => error?.notSent === true || error?.rejected === true && error.status >= 400 && error.status < 500;
+const MAX_FAILURE_LOG_LINES = 1000;
+async function writeBoundedJsonl(file, row, maxLines = MAX_FAILURE_LOG_LINES) {
+  try {
+    let lines = [];
+    try { lines = (await readFile(file, 'utf8')).split('\n').filter(Boolean); } catch (error) { if (error.code !== 'ENOENT') return; }
+    lines.push(JSON.stringify(row));
+    if (lines.length > maxLines) lines = lines.slice(-maxLines);
+    const temporary = `${file}.${randomUUID()}.tmp`;
+    await writeFile(temporary, lines.join('\n') + '\n', { mode: 0o600, flag: 'wx' });
+    await rename(temporary, file);
+  } catch {}
+}
 
-export async function createMultiRelay({ config, adapters, platformErrors = {}, directory, now = Date.now, pause = sleep, operationTimeoutMs = 30000, queueLimit = 1000, deliveryBudget = 10, writeRecord = appendRecord, resendDelayMs = 30000 }) {
+export async function createMultiRelay({ config, adapters, platformErrors = {}, directory, now = Date.now, pause = sleep, operationTimeoutMs = 35000, queueLimit = 1000, deliveryBudget = 10, writeRecord = appendRecord, resendDelayMs = 30000 }) {
   if (!Number.isSafeInteger(queueLimit) || queueLimit < 1 || !Number.isSafeInteger(deliveryBudget) || deliveryBudget < 1) throw new Error('Invalid queue limits');
   const cursors = new Map();
   const cooldowns = new Map(), cooldownNotes = new Map();
@@ -190,9 +202,24 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     return true;
   }
   function resendable(edge, id) { return typeof edge.pending.get(id) === 'string' && edge.doubts.get(id) === 1; }
+  const failureLogFile = path.join(directory, 'lineport-failures.jsonl');
   function recordFailure(edge, kind) {
     const safe = FAILURE_KINDS.includes(kind) ? kind : 'unknown';
     edge.status.failures[safe] = (edge.status.failures[safe] || 0) + 1;
+    return safe;
+  }
+  async function logFailure(edge, stage, outcome, error, elapsedMs) {
+    const safe = recordFailure(edge, failureKind(error));
+    await writeBoundedJsonl(failureLogFile, {
+      at: new Date(now()).toISOString(),
+      route: edge.status.key,
+      stage,
+      outcome,
+      failure: safe,
+      elapsedMs: Math.max(0, Math.floor(elapsedMs)),
+      ...failureDetail(error),
+    });
+    return safe;
   }
   function clearHold(edge) { edge.holdUntil = 0; edge.holdFailures = 0; edge.holdNote = ''; edge.holdStage = ''; }
   // Nothing was delivered: keep the item queued and try again later (5 s doubling to 5 min) instead of
@@ -362,15 +389,20 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             // Attachments may take longer to download and upload than a text message.
             const deadline = typeof text === 'string' ? operationTimeoutMs : operationTimeoutMs * 4;
             let prepared;
+            const prepareStart = now();
             try {
               prepared = adapters[edge.destination.platform].preparePayload
                 ? await withDeadline(adapters[edge.destination.platform].preparePayload(text), deadline) : undefined;
             } catch (error) {
-              recordFailure(edge, failureKind(error));
+              const prepareElapsed = now() - prepareStart;
               // Nothing was sent yet: an attachment that can never be prepared is quarantined; definite auth/config
               // errors stop cleanly; transient download failures back off (5 s doubling to 5 min) up to 6 attempts.
-              if (await quarantine(edge, id, error, 'prepare')) { clearHold(edge); continue; }
+              if (await quarantine(edge, id, error, 'prepare')) {
+                await logFailure(edge, 'prepare', 'quarantined', error, prepareElapsed);
+                clearHold(edge); continue;
+              }
               if (error?.loginRequired === true || definitelyNotSent(error)) {
+                await logFailure(edge, 'prepare', 'failed', error, prepareElapsed);
                 clearHold(edge);
                 status.phase = 'failed';
                 status.stage = error?.loginRequired === true ? 'login_required' : error?.rejected === true ? 'destination_rejected' : 'prepare';
@@ -379,6 +411,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
                 status.warning = `${error instanceof RelayError ? error.message : relayFailure(status.stage)}；訊息確定尚未送出，待送已保留，排除問題後重新啟動即可續送。`;
                 continue;
               }
+              await logFailure(edge, 'prepare', 'retry', error, prepareElapsed);
               defer(edge, error, 'prepare');
               if (edge.holdFailures >= 6) {
                 const note = error instanceof RelayError ? error.message : relayFailure('prepare');
@@ -399,6 +432,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             const replyTo = edge.rule.replies && parent ? destinationReply(edge.destination.platform, edge.destination.id, edge.delivered.get(parent)) : undefined;
             status.replyNotice = parent && !replyTo ? '原訊息未轉送、尚未確認送達或沒有可用對照；這則改送一般訊息，不補送原訊息' : replyTo ? (edge.destination.platform === 'line' ? '引用此路線已確認送達的原訊息；引用失敗會暫停此路線，請先確認平台狀態' : '引用此路線已確認送達的原訊息；平台找不到原訊息時可能改送一般訊息') : '';
             let result, deliveredChunks = 0;
+            const sendStart = now();
             try {
               attempted = true;
               attemptedDestinations.add(destinationKey);
@@ -423,8 +457,9 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
               }
               result = { id: firstResult.id, ids: allOutputIds };
             } catch (error) {
+              const sendElapsed = now() - sendStart;
               if ((edge.destination.platform === 'telegram' && error instanceof TelegramRateLimit || edge.destination.platform === 'discord' && error instanceof DiscordRateLimit) && deliveredChunks === 0) {
-                recordFailure(edge, 'rate_limit');
+                await logFailure(edge, 'send', 'retry', error, sendElapsed);
                 settleAttempt(edge, id);
                 const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + error.retryAfterMs);
                 await edge.record({ id, outcome: 'retry', retryAt, failure: 'rate_limit' });
@@ -435,14 +470,14 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
               }
               // A definite per-message rejection with nothing delivered is quarantined, never retried or resent.
               if (error?.rejected === true && deliveredChunks === 0 && await quarantine(edge, id, error, 'send')) {
-                recordFailure(edge, 'rejected');
+                await logFailure(edge, 'send', 'quarantined', error, sendElapsed);
                 edge.doubts.delete(id); clearHold(edge);
                 continue;
               }
               // Only a request that provably never left this machine may be retried; any delivered chunk
               // means a retry would duplicate it without a notice, so that case falls through to uncertain.
               if (error?.unsent === true && deliveredChunks === 0) {
-                recordFailure(edge, 'unsent');
+                await logFailure(edge, 'send', 'retry', error, sendElapsed);
                 settleAttempt(edge, id);
                 edge.unsentFailures = (edge.unsentFailures || 0) + 1;
                 const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + Math.min(300000, 5000 * 2 ** Math.min(edge.unsentFailures - 1, 6)));
@@ -455,8 +490,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
               // Pre-send validation failures and chat/auth 4xx rejections delivered nothing: resolve the sending
               // row with a retry record, fail the route for attention, and keep the item queued verbatim.
               if ((definitelyNotSent(error) || error?.loginRequired === true) && deliveredChunks === 0) {
-                const kind = failureKind(error);
-                recordFailure(edge, kind);
+                const kind = await logFailure(edge, 'send', 'failed', error, sendElapsed);
                 settleAttempt(edge, id); clearHold(edge);
                 await edge.record({ id, outcome: 'retry', retryAt: Math.max(1, now()), failure: kind, ...failureDetail(error) });
                 status.phase = 'failed';
@@ -466,8 +500,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
                 status.warning = `${error instanceof RelayError ? error.message : relayFailure(status.stage)}；訊息確定尚未送出，待送已保留，排除問題後重新啟動即可續送。`;
                 continue;
               }
-              const kind = failureKind(error), at = now();
-              recordFailure(edge, kind);
+              const kind = await logFailure(edge, 'send', 'uncertain', error, sendElapsed), at = now();
               if (!edge.uncertainAt.has(id)) edge.uncertainAt.set(id, at);
               await edge.record({ id, outcome: 'uncertain', at, failure: kind, ...failureDetail(error) });
               if (resendable(edge, id)) {

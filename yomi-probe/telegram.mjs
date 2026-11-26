@@ -40,7 +40,7 @@ export function createTelegramClient(token, { request = fetch } = {}) {
       }
       const response = await request(`https://api.telegram.org/bot${token}/${method}`, {
         method: 'POST', headers, body,
-        signal: AbortSignal.timeout(method === 'getUpdates' ? 25000 : file ? 110000 : 15000), redirect: 'error',
+        signal: AbortSignal.timeout(method === 'getUpdates' ? 25000 : file ? 110000 : 30000), redirect: 'error',
       });
       let result;
       // A reply that cannot be read leaves the outcome unknown; keep the HTTP status for the failure log.

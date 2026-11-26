@@ -7,6 +7,7 @@ param(
     [int]$MaxRestarts = 3,
     [int]$WindowMinutes = 15,
     [int]$LogLines = 500,
+    [string]$StopRelayScript = '',
     [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
@@ -68,6 +69,38 @@ function Start-Entrypoint([string]$Name) {
     return $true
 }
 
+function Stop-HungRelay {
+    if ($DryRun) { Write-WatchdogLog '[dry-run] would stop hung relay'; return $true }
+    $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $candidate = $StopRelayScript
+    if (!$candidate) {
+        $listeners = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort 18766 -State Listen -ErrorAction SilentlyContinue)
+        foreach ($listener in $listeners) {
+            $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue
+            if ($proc -and $proc.Name -eq 'node.exe' -and $proc.CommandLine -match '^"?[^"\r\n]*node\.exe"?\s+"?(?<relay>[^"\r\n]+relay\.mjs)"?\s*$') {
+                $dir = Split-Path -Parent $Matches['relay']
+                $pkgPath = Join-Path $dir 'package.json'
+                $stopPath = Join-Path $dir 'stop-relay.ps1'
+                if ((Test-Path -LiteralPath $pkgPath) -and (Test-Path -LiteralPath $stopPath)) {
+                    $pkg = Get-Content -LiteralPath $pkgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                    if ($pkg.name -eq 'lineport') { $candidate = $stopPath; break }
+                }
+            }
+        }
+    }
+    if (!$candidate -or !(Test-Path -LiteralPath $candidate)) {
+        Write-WatchdogLog 'hung relay stop skipped: verified stop-relay.ps1 not found'
+        return $false
+    }
+    & $shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $candidate | Out-Null
+    for ($wait = 0; $wait -lt 20; $wait++) {
+        if (!(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort 18766 -State Listen -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 250
+    }
+    Write-WatchdogLog "stopped hung relay via $candidate"
+    return $true
+}
+
 try {
     $autostart = Read-JsonFile (Join-Path $LinePortHome 'autostart.json')
     if (!$autostart -or (!$autostart.service -and !$autostart.relay)) { exit 0 }
@@ -85,31 +118,51 @@ try {
         }
     } catch { }
 
-    $actions = @()
-    if (!$serviceUp -and $autostart.service) { $actions += 'autostart-service.ps1' }
-    # A stopped relay (no process) is restarted; failed/blocked routes need a person and are left alone.
-    if ($relayWanted -and (!$serviceUp -or $relayPhase -in @('stopped', 'unavailable'))) {
-        if ($serviceUp -or $autostart.service) { $actions += 'autostart-relay.ps1' }
-    }
-    if (!$actions.Count) { exit 0 }
-
     $state = Read-JsonFile $statePath
     $now = Get-Date
     $recent = @(@($state.restarts) | Where-Object { $_ } | ForEach-Object { [datetime]::Parse($_, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) } | Where-Object { ($now - $_).TotalMinutes -lt $WindowMinutes })
+    $prevStreak = if ($state -and $null -ne $state.unavailableStreak) { [int]$state.unavailableStreak } else { 0 }
+    $unavailableStreak = if ($relayWanted -and $serviceUp -and $relayPhase -eq 'unavailable') { $prevStreak + 1 } else { 0 }
+
+    $actions = @()
+    $stopHungFirst = $false
+    if (!$serviceUp -and $autostart.service) { $actions += 'autostart-service.ps1' }
+    # A stopped relay (no process) is restarted immediately; a hung relay (unavailable) is stopped first on its 2nd consecutive check.
+    if ($relayWanted -and !$serviceUp) {
+        if ($autostart.service) { $actions += 'autostart-relay.ps1' }
+    } elseif ($relayWanted -and $relayPhase -eq 'stopped') {
+        $actions += 'autostart-relay.ps1'
+    } elseif ($relayWanted -and $relayPhase -eq 'unavailable') {
+        if ($unavailableStreak -lt 2) {
+            Write-WatchdogLog "relay unavailable (streak $unavailableStreak/2); waiting one more check before stopping hung worker"
+            Save-State @{ restarts = @($recent | ForEach-Object { $_.ToString('o') }); circuitLoggedAt = $(if ($state) { $state.circuitLoggedAt } else { $null }); unavailableStreak = $unavailableStreak }
+            exit 0
+        }
+        $stopHungFirst = $true
+        $actions += 'autostart-relay.ps1'
+    }
+    if (!$actions.Count) {
+        if ($prevStreak -ne 0) {
+            Save-State @{ restarts = @($recent | ForEach-Object { $_.ToString('o') }); circuitLoggedAt = $(if ($state) { $state.circuitLoggedAt } else { $null }); unavailableStreak = 0 }
+        }
+        exit 0
+    }
+
     $reason = 'service ' + $(if ($serviceUp) { 'up' } else { 'down' }) + ', relay ' + $relayPhase
     if ($recent.Count -ge $MaxRestarts) {
         # Circuit breaker: log and notify once per open window, then stay quiet until restarts age out.
         if (!$state.circuitLoggedAt -or ($now - [datetime]::Parse($state.circuitLoggedAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)).TotalMinutes -ge $WindowMinutes) {
             Write-WatchdogLog "circuit open: $($recent.Count) restarts within $WindowMinutes minutes; not restarting ($reason). Check autostart.log and the LinePort page."
             Send-WatchdogToast 'LinePort 看門狗已暫停自動重啟' "服務連續重啟 $($recent.Count) 次仍無法恢復（$reason），請開啟 LinePort 並檢查 autostart.log。"
-            Save-State @{ restarts = @($recent | ForEach-Object { $_.ToString('o') }); circuitLoggedAt = $now.ToString('o') }
+            Save-State @{ restarts = @($recent | ForEach-Object { $_.ToString('o') }); circuitLoggedAt = $now.ToString('o'); unavailableStreak = $unavailableStreak }
         }
         exit 0
     }
     Write-WatchdogLog "recovering: $reason"
+    if ($stopHungFirst) { Stop-HungRelay | Out-Null }
     $started = $false
     foreach ($action in $actions) { if (Start-Entrypoint $action) { $started = $true } }
-    if ($started) { Save-State @{ restarts = @(@($recent | ForEach-Object { $_.ToString('o') }) + $now.ToString('o')); circuitLoggedAt = $null } }
+    if ($started) { Save-State @{ restarts = @(@($recent | ForEach-Object { $_.ToString('o') }) + $now.ToString('o')); circuitLoggedAt = $null; unavailableStreak = 0 } }
 } catch {
     $text = [string]$_.Exception.Message
     Write-WatchdogLog ('watchdog error: ' + $_.Exception.GetType().Name + ': ' + $text.Substring(0, [Math]::Min(300, $text.Length)))

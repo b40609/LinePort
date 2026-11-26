@@ -24,7 +24,7 @@ export function createDiscordClient(token, { request = fetch } = {}) {
         body.append('files[0]', new Blob([file.bytes]), file.fileName);
       }
       const response = await request(`https://discord.com/api/v10${route}`, {
-        method: data === undefined ? 'GET' : 'POST', headers, body, signal: AbortSignal.timeout(file ? 110000 : 15000), redirect: 'error',
+        method: data === undefined ? 'GET' : 'POST', headers, body, signal: AbortSignal.timeout(file ? 110000 : 30000), redirect: 'error',
       });
       let result;
       try { result = await response.json(); }

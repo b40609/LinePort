@@ -27,7 +27,7 @@ import { compactStorage } from './compaction.mjs';
 import { recentSenders, lineSourceSenders } from './source-senders.mjs';
 import { createDiscordClient, discordId } from './discord.mjs';
 import { notifyWindows } from './windows-notify.mjs';
-import { createHealthMonitor, startHealthMonitor, telegramAlertChannel, windowsAlertChannel, formatTestAlert } from './health-alert.mjs';
+import { createHealthMonitor, startHealthMonitor, telegramAlertChannel, webhookAlertChannel, localLogAlertChannel, windowsAlertChannel, alertTargetConflict, formatTestAlert } from './health-alert.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, onShutdown = () => {}, relayController, settingsStore, reviewStore, dataDirectory, autostartStore, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, healthAlerts = false, notify = notifyWindows, updateCheck = checkForUpdate, port = 18765, token = randomBytes(32).toString('hex') }) {
@@ -45,12 +45,38 @@ service.on('line:loginRequired', () => {
 // Health checks run on their own timer in this UI process, isolated from the relay worker.
 async function healthSnapshot() {
   const relay = relayController ? await relayController.status() : {};
-  let storage = null;
+  let storage = null, relayWanted = false, dailySummary = true, dailySummaryHour = 9, watchdogCircuitAt = '';
   if (dataDirectory) { try { storage = await storageHealth(dataDirectory); } catch {} }
-  return { relay, account: { phase: state.phase }, storage };
+  if (autostartStore) {
+    try {
+      const [auto, intent] = await Promise.all([autostartStore.load(), autostartStore.loadRelayIntent?.() ?? null]);
+      relayWanted = intent?.desired === 'running' || Boolean(auto?.relay && intent?.desired !== 'stopped');
+    } catch {}
+    if (process.env.LOCALAPPDATA) {
+      try {
+        const wd = JSON.parse((await readFile(path.join(process.env.LOCALAPPDATA, 'LinePort', 'watchdog-state.json'), 'utf8')).replace(/^\uFEFF/, ''));
+        if (typeof wd?.circuitLoggedAt === 'string') watchdogCircuitAt = wd.circuitLoggedAt;
+      } catch {}
+    }
+  }
+  if (settingsStore?.healthAlert) {
+    try {
+      const alertCfg = await settingsStore.healthAlert();
+      dailySummary = alertCfg.dailySummary ?? true;
+      dailySummaryHour = alertCfg.dailySummaryHour ?? 9;
+    } catch {}
+  }
+  return { relay, account: { phase: state.phase }, storage, relayWanted, dailySummary, dailySummaryHour, watchdogCircuitAt };
 }
 const healthMonitor = healthAlerts ? (() => {
-  const monitor = createHealthMonitor({ channels: [windowsAlertChannel(notify), ...(settingsStore?.healthAlert ? [telegramAlertChannel(settingsStore, telegramFactory)] : [])] });
+  const monitor = createHealthMonitor({
+    dataDirectory,
+    channels: [
+      ...(dataDirectory ? [localLogAlertChannel(dataDirectory)] : []),
+      windowsAlertChannel(notify),
+      ...(settingsStore?.healthAlert ? [telegramAlertChannel(settingsStore, telegramFactory), webhookAlertChannel(settingsStore)] : []),
+    ],
+  });
   return { check: async () => monitor.check(await healthSnapshot()), monitor };
 })() : null;
 function recordRelayIntent(desired) { void autostartStore?.saveRelayIntent?.(desired).catch(() => {}); }
@@ -99,7 +125,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && req.url === '/api/autostart' && autostartStore) return send(res, 200, { autostart: await autostartStore.load() });
     if (req.method === 'GET' && req.url === '/api/settings/backup' && settingsStore) return send(res, 200, settingsBackup(await settingsStore.load(), await settingsStore.healthAlert?.()));
-    if (req.method === 'GET' && req.url === '/api/health-alert' && settingsStore?.healthAlert) return send(res, 200, { healthAlert: await settingsStore.healthAlert(), telegramConfigured: Boolean(await settingsStore.telegramToken()) });
+    if (req.method === 'GET' && req.url === '/api/health-alert' && settingsStore?.healthAlert) {
+      const dedicated = Boolean(await settingsStore.alertTelegramToken?.());
+      return send(res, 200, { healthAlert: await settingsStore.healthAlert(), telegramConfigured: Boolean(await settingsStore.telegramToken()), ...(dedicated ? { alertTelegramConfigured: true } : {}) });
+    }
     if (req.method === 'GET' && req.url === '/api/diagnostics') return send(res, 200, safeDiagnostics(relayController ? await relayController.status() : {}, state.connected));
     // Manual only: the page calls this when the user presses the button; nothing is downloaded.
     if (req.method === 'GET' && req.url === '/api/update/check') return send(res, 200, await updateCheck());
@@ -160,18 +189,57 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/rules/preview') return send(res, 200, previewRules(input));
     if (req.url === '/api/health-alert' && settingsStore?.saveHealthAlert) {
       const healthAlert = await operation(async () => {
-        if (input.enabled === true && !await settingsStore.telegramToken()) throw new HttpError(400, '請先在「連結帳號」連結 Telegram Bot；系統健康告警會沿用同一個 Bot，不另存 Token');
-        return settingsStore.saveHealthAlert(input);
+        const shared = await settingsStore.telegramToken();
+        let incomingDedicated = '';
+        if (input.alertBotToken !== undefined) {
+          if (typeof input.alertBotToken !== 'string' || !input.alertBotToken.trim()) throw new HttpError(400, '請提供有效的獨立告警 Telegram Bot Token');
+          incomingDedicated = input.alertBotToken.trim();
+          if (shared && incomingDedicated === shared) throw new HttpError(400, '獨立告警 Bot Token 不可與轉送路線的 Telegram Bot 相同');
+          try { telegramFactory(incomingDedicated); } catch (error) { throw new HttpError(400, error instanceof RelayError ? error.message : '獨立告警 Bot Token 格式不正確'); }
+          if (!settingsStore.saveAlertTelegram) throw new HttpError(503, '此環境未支援保存獨立告警 Bot');
+        }
+        const savedDedicated = settingsStore.alertTelegramToken ? await settingsStore.alertTelegramToken() : '';
+        const dedicated = incomingDedicated || savedDedicated;
+        if (input.enabled === true && !input.webhookUrl && !dedicated && !shared) {
+          throw new HttpError(400, '請先設定獨立告警 Bot（alertBotToken）、Webhook 網址，或在「連結帳號」連結 Telegram Bot');
+        }
+        if (input.enabled === true && input.telegramChatId && settingsStore.load) {
+          const conflict = alertTargetConflict(await settingsStore.load(), input, {
+            hasDedicatedBot: Boolean(dedicated),
+            sameAsRelayBot: Boolean(dedicated && shared && dedicated === shared),
+          });
+          if (conflict) throw new HttpError(400, conflict);
+        }
+        const saved = await settingsStore.saveHealthAlert(input);
+        if (incomingDedicated) await settingsStore.saveAlertTelegram(incomingDedicated, input.protectAlertBot === true);
+        return saved;
       });
       return send(res, 200, { healthAlert });
     }
     if (req.url === '/api/health-alert/test' && settingsStore?.healthAlert) {
       await operation(async () => {
         const settings = await settingsStore.healthAlert();
-        if (!settings.telegramChatId) throw new HttpError(400, '請先保存告警 Telegram 聊天室 ID');
-        if (!await settingsStore.telegramToken()) throw new HttpError(400, '請先在「連結帳號」連結 Telegram Bot');
-        try { await telegramAlertChannel(settingsStore, telegramFactory).send(formatTestAlert(Date.now())); }
-        catch (error) { throw new HttpError(502, error instanceof RelayError ? `測試告警未送出：${error.message}` : '測試告警未送出；請確認聊天室 ID、Bot 是否在聊天室內與網路'); }
+        if (!settings.telegramChatId && !settings.webhookUrl) throw new HttpError(400, '請先保存告警目的地（獨立 Telegram 聊天室 ID 或 Webhook 網址）');
+        try {
+          if (settings.webhookUrl) await webhookAlertChannel(settingsStore).send(formatTestAlert(Date.now()), { kind: 'test' });
+          if (settings.telegramChatId) {
+            const dedicated = settingsStore.alertTelegramToken ? await settingsStore.alertTelegramToken() : '';
+            const shared = await settingsStore.telegramToken();
+            if (!dedicated && !shared) throw new HttpError(400, '請先設定告警 Telegram Bot');
+            if (settingsStore.load) {
+              const conflict = alertTargetConflict(await settingsStore.load(), settings, {
+                hasDedicatedBot: Boolean(dedicated),
+                sameAsRelayBot: Boolean(dedicated && shared && dedicated === shared),
+              });
+              if (conflict) throw new HttpError(400, conflict);
+            }
+            const client = telegramFactory(dedicated || shared);
+            await client.send(settings.telegramChatId, formatTestAlert(Date.now()), settings.telegramThreadId ? { threadId: settings.telegramThreadId } : {});
+          }
+        } catch (error) {
+          if (error instanceof HttpError) throw error;
+          throw new HttpError(502, error instanceof RelayError ? `測試告警未送出：${error.message}` : '測試告警未送出；請確認告警目的地、Bot 權限與網路');
+        }
       });
       return send(res, 200, { sent: true });
     }

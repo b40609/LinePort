@@ -2,7 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { relayWarning, relayFailure, safeRelayStage, safeDestinationFailureReason, RelayError } from './relay-health.mjs';
+import { relayWarning, relayFailure, safeRelayStage, safeDestinationFailureReason, FAILURE_KINDS, RelayError } from './relay-health.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const execute = promisify(execFile);
@@ -32,16 +32,23 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
             id: String(value?.id || '').slice(0, 100), name: String(value?.name || '').slice(0, 100),
             ...(Number.isSafeInteger(value?.threadId) && value.threadId > 0 && value.threadId <= 2147483647 ? { threadId: value.threadId } : {}) });
           const count = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
+          const safeId = id => typeof id === 'string' && /^[A-Za-z0-9:_-]{1,80}$/.test(id);
+          const safeFailures = value => Object.fromEntries(FAILURE_KINDS.filter(k => Number.isSafeInteger(value?.[k]) && value[k] > 0).map(k => [k, value[k]]));
           safe.routes = Array.isArray(state.routes) ? state.routes.slice(0, 100).map(route => ({
             key: String(route.key || '').slice(0, 64), ruleId: String(route.ruleId || '').slice(0, 64), name: String(route.name || '').slice(0, 100),
             source: endpoint(route.source), destination: endpoint(route.destination), phase: String(route.phase || '').slice(0, 30),
             stage: safeRelayStage(route.stage),
             ...(['e2ee', 'transport'].includes(route.lineProtection) ? { lineProtection: route.lineProtection } : {}),
             ...(route.stage === 'destination_e2ee' ? { failureReason: safeDestinationFailureReason(route.failureReason) } : {}),
+            ...(route.loginRequired === true ? { loginRequired: true } : {}),
+            ...(typeof route.fastForwardAt === 'string' ? { fastForwardAt: route.fastForwardAt.slice(0, 40) } : {}),
             forwarded: count(route.forwarded), pending: count(route.pending), uncertain: count(route.uncertain), errors: count(route.errors), skipped: count(route.skipped),
+            quarantined: count(route.quarantined), quarantinedSinceStart: count(route.quarantinedSinceStart), deduplicated: count(route.deduplicated), resent: count(route.resent), retrying: count(route.retrying),
+            failures: safeFailures(route.failures),
             lastSend: typeof route.lastSend === 'string' ? route.lastSend.slice(0, 40) : null, warning: String(route.warning || '').slice(0, 300), replyNotice: String(route.replyNotice || '').slice(0, 200),
             retryAt: count(route.retryAt),
-            uncertainIds: Array.isArray(route.uncertainIds) ? route.uncertainIds.filter(id => typeof id === 'string' && /^[A-Za-z0-9:_-]{1,80}$/.test(id)).slice(-5) : [],
+            uncertainIds: Array.isArray(route.uncertainIds) ? route.uncertainIds.filter(safeId).slice(-5) : [],
+            quarantineIds: Array.isArray(route.quarantineIds) ? route.quarantineIds.filter(safeId).slice(-5) : [],
             lastRead: route.lastRead ? readCounts(route.lastRead) : null,
           })) : [];
           safe.sources = Array.isArray(state.sources) ? state.sources.slice(0, 100).map(source => ({ ...endpoint(source), polls: count(source.polls), received: count(source.received), decryptFailed: count(source.decryptFailed), lastPoll: typeof source.lastPoll === 'string' ? source.lastPoll.slice(0, 40) : null, warning: String(source.warning || '').slice(0, 300), consecutiveErrors: count(source.consecutiveErrors), loginRequired: source.loginRequired === true })) : [];

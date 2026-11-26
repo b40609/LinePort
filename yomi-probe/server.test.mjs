@@ -248,7 +248,7 @@ test('isolated HTTP download, backup validation and restore preserve pre-restore
   assert.equal(diagnostics.stage, 'unknown');
   assert.equal(diagnostics.routes[0].stage, 'destination_e2ee');
   assert.equal(diagnostics.routes[0].failureReason, 'missing_receiver_key');
-  assert.deepEqual(Object.keys(diagnostics.routes[0]).sort(), ['errors', 'failureReason', 'forwarded', 'pending', 'phase', 'route', 'skipped', 'stage', 'uncertain']);
+  assert.deepEqual(Object.keys(diagnostics.routes[0]).sort(), ['deduplicated', 'errors', 'failureReason', 'forwarded', 'pending', 'phase', 'quarantined', 'resent', 'retrying', 'route', 'skipped', 'stage', 'uncertain']);
   const before = await readFile(path.join(directory, 'lineport-rules.json'), 'utf8');
   const invalid = { ...backup, version: 999 };
   assert.equal((await call('/api/settings/validate', JSON.stringify({ backup: invalid }))).status, 400);

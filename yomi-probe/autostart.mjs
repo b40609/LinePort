@@ -114,6 +114,12 @@ export function createAutostartStore(localAppData = process.env.LOCALAPPDATA, op
       await writeFile(temporary, JSON.stringify({ desired, at: new Date().toISOString() }), { mode: 0o600, flag: 'wx' });
       await rename(temporary, target);
     },
+    async loadRelayIntent() {
+      try {
+        const parsed = JSON.parse(await readFile(path.join(directory, intentFile), 'utf8'));
+        return parsed && ['running', 'stopped'].includes(parsed.desired) ? { desired: parsed.desired, at: typeof parsed.at === 'string' ? parsed.at : '' } : null;
+      } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    },
   };
 }
 
