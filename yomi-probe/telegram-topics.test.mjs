@@ -120,26 +120,38 @@ test('two topics isolate delivery and reply journals across restart, and changin
   assert.equal((await readdir(dir)).filter(name => name.startsWith('lineport-route-')).length, 3);
 });
 
-test('invalid or unconfirmed topics block only their route and never retry to the default chat', async () => {
+test('invalid or unconfirmed topics fail or block only their route and never retry to the default chat', async () => {
   for (const failure of ['rejected', 'wrong-thread']) {
+    let clock = 1000;
     const dir = await directory(), calls = [];
     const client = createTelegramClient(token, { request: async (url, options) => {
       const data = JSON.parse(options.body); calls.push(data);
-      if (data.message_thread_id === 10 && failure === 'rejected') return { ok: false, json: async () => ({ ok: false, error_code: 400 }) };
+      if (data.message_thread_id === 10 && failure === 'rejected') return { ok: false, status: 400, json: async () => ({ ok: false, error_code: 400 }) };
       return ok({ message_id: calls.length, chat: { id: -222 }, message_thread_id: 20 });
     } });
     const telegram = { identity: 'synthetic-bot', recent: async () => [], prepare: async () => {},
       read: async () => [{ id: '-111:1', text: 'hello', createdTime: 1100 }], send: (id, text, options) => client.send(id, text, options) };
-    const options = { config: config([topic(10), topic(20)]), adapters: { telegram }, directory: dir, now: () => 1000, pause: async () => {} };
+    const options = { config: config([topic(10), topic(20)]), adapters: { telegram }, directory: dir, now: () => clock, pause: async () => {}, resendDelayMs: 1000 };
     const relay = await createMultiRelay(options); await relay.tick();
-    assert.equal(relay.state.routes.find(row => row.destination.threadId === 10).phase, 'blocked');
-    assert.equal(relay.state.forwarded, 1);
-    const restarted = await createMultiRelay(options); await restarted.tick();
-    assert.equal(calls.length, 2);
-    assert.ok(calls.every(call => call.message_thread_id === 10 || call.message_thread_id === 20));
-    const journals = (await readdir(dir)).filter(name => name.startsWith('lineport-route-'));
-    const reviews = await Promise.all(journals.map(name => inspectDelivery(dir, name.slice(15, -6))));
-    assert.ok(reviews.some(review => review.unresolved.size === 1 && review.route.destination.includes('話題 #10')));
+    if (failure === 'rejected') {
+      assert.equal(relay.state.routes.find(row => row.destination.threadId === 10).phase, 'failed');
+      assert.equal(relay.state.routes.find(row => row.destination.threadId === 10).stage, 'destination_rejected');
+      assert.equal(relay.state.forwarded, 1);
+      assert.ok(calls.every(call => call.message_thread_id === 10 || call.message_thread_id === 20));
+      const journals = (await readdir(dir)).filter(name => name.startsWith('lineport-route-'));
+      const reviews = await Promise.all(journals.map(name => inspectDelivery(dir, name.slice(15, -6))));
+      assert.ok(reviews.every(review => review.unresolved.size === 0));
+    } else {
+      clock += 1000; await relay.tick();
+      assert.equal(relay.state.routes.find(row => row.destination.threadId === 10).phase, 'blocked');
+      assert.equal(relay.state.forwarded, 1);
+      const restarted = await createMultiRelay(options); clock += 5000; await restarted.tick();
+      assert.equal(calls.length, 3);
+      assert.ok(calls.every(call => call.message_thread_id === 10 || call.message_thread_id === 20));
+      const journals = (await readdir(dir)).filter(name => name.startsWith('lineport-route-'));
+      const reviews = await Promise.all(journals.map(name => inspectDelivery(dir, name.slice(15, -6))));
+      assert.ok(reviews.some(review => review.unresolved.size === 1 && review.route.destination.includes('話題 #10')));
+    }
   }
 });
 

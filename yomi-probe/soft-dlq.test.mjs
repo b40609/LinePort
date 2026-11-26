@@ -14,7 +14,7 @@ const endpoint = (platform, id) => ({ platform, id, name: id });
 const config = normalizeConfig({ version: 1, rules: [{ id: 'r', name: '公告', enabled: true, sources: [endpoint('line', 'csource')], destinations: [endpoint('telegram', '-2')] }] });
 const permanent = () => Object.assign(new RelayError('Telegram 拒絕此則內容'), { rejected: true, permanent: true, status: 400 });
 
-async function fixture(directory, failures) {
+async function fixture(directory, failures, extra = {}) {
   let messages = [];
   const sent = [];
   const line = { identity: 'line', recent: async () => [], prepare: async () => 'e2ee', read: async () => messages, send: async () => ({ id: '1' }) };
@@ -23,7 +23,7 @@ async function fixture(directory, failures) {
     if (failure) throw failure;
     sent.push(text); return { id: `${id}:${sent.length}` };
   } };
-  const relay = await createMultiRelay({ config, adapters: { line, telegram }, directory, now: () => 1000, pause: async () => {}, deliveryBudget: 20 });
+  const relay = await createMultiRelay({ config, adapters: { line, telegram }, directory, now: () => 1000, pause: async () => {}, deliveryBudget: 20, ...extra });
   return { relay, sent, push: (...texts) => { messages = [...messages, ...texts.map((text, index) => ({ id: `m${messages.length + index + 1}`, text, createdTime: 2000, from: 'u1' }))]; } };
 }
 const route = relay => relay.state.routes[0];
@@ -72,9 +72,14 @@ test('a definite per-message rejection is quarantined with an audit row and late
 
 test('an uncertain send is never quarantined, even when marked permanent', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-dlq-'));
+  let clock = 1000;
   // Not a platform rejection: the request may have been delivered.
-  const f = await fixture(directory, text => text === '不明' ? Object.assign(new RelayError('連線中斷'), { permanent: true }) : null);
+  const f = await fixture(directory, text => text.includes('不明') ? Object.assign(new RelayError('連線中斷'), { permanent: true }) : null,
+    { now: () => clock, resendDelayMs: 1000 });
   f.push('不明', '之後');
+  await f.relay.tick();
+  assert.equal(route(f.relay).quarantined, 0);
+  clock += 1000;
   await f.relay.tick();
   assert.deepEqual(f.sent, []);
   assert.equal(route(f.relay).phase, 'blocked');

@@ -24,13 +24,12 @@ async function readDelivery(directory, identity) {
   const journal = await readOptional(path.join(directory, `lineport-route-${identity}.jsonl`));
   const saved = parseJournal(journal);
   if (saved.routeIdentity !== identity) throw new HttpError(409, '路線紀錄不符，請保留資料並重新檢查');
-  const unresolved = new Set();
+  // Unresolved: at least one send attempt whose result is unknown (parseJournal's doubts).
+  const unresolved = new Set(saved.doubts.keys());
   let route = null;
   for (const line of journal.split('\n').filter(Boolean)) {
     const row = JSON.parse(line);
     if (row.routeIdentity) route = { name: String(row.name || '').slice(0, 100), source: String(row.source?.name || '').slice(0, 100), destination: String(row.destination?.name || '').slice(0, 100) + (row.destination?.threadId !== undefined ? `（話題 #${row.destination.threadId}）` : '') };
-    if (['sending', 'uncertain'].includes(row.outcome)) unresolved.add(row.id);
-    if (['sent', 'retry'].includes(row.outcome)) unresolved.delete(row.id);
   }
   const review = await readOptional(path.join(directory, `lineport-review-${identity}.jsonl`));
   if (review && !review.endsWith('\n')) throw new Error('Incomplete review journal');
@@ -54,8 +53,11 @@ async function readDelivery(directory, identity) {
     } else if ('fastForward' in row || 'dropped' in row) throw new Error('Invalid review journal');
     unresolved.delete(row.id); saved.pending.delete(row.id); resolutions.push(row);
   }
+  // A reviewed or quarantined item needs no further send, so it carries no doubt either.
+  for (const id of [...saved.doubts.keys()]) if (!unresolved.has(id)) saved.doubts.delete(id);
   return { identity, revision: createHash('sha256').update(JSON.stringify([journal, review])).digest('hex'),
-    unresolved, pending: saved.pending, resolutions, quarantined, route, fastForwardAt, startedAt: saved.startedAt };
+    unresolved, pending: saved.pending, resolutions, quarantined, route, fastForwardAt, startedAt: saved.startedAt,
+    doubts: saved.doubts, times: saved.times, uncertainAt: saved.uncertainAt };
 }
 export function createDeliveryReviewStore(directory, { now = Date.now } = {}) {
   return {
@@ -70,8 +72,10 @@ export function createDeliveryReviewStore(directory, { now = Date.now } = {}) {
         // A blocked route writes nothing more, so the journal's last write marks when it stopped.
         const blockedSince = new Date((await lstat(path.join(directory, name))).mtimeMs).toISOString();
         const backlog = [...result.pending.keys()].filter(id => !result.unresolved.has(id)).length;
+        // autoResend: a text with one unknown attempt is resent once (marked as a possible duplicate) at the next start.
         for (const id of result.unresolved) items.push({ identity: result.identity, revision: result.revision, id, text: describePayload(result.pending.get(id) || ''),
-          pending: result.pending.size, backlog, blockedSince, route: result.route });
+          pending: result.pending.size, backlog, blockedSince, route: result.route,
+          autoResend: typeof result.pending.get(id) === 'string' && result.doubts.get(id) === 1 });
       }
       return { items, quarantined: quarantined.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 50) };
     },

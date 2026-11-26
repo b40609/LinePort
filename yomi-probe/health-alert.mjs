@@ -24,6 +24,7 @@ export function healthEvents({ relay = {}, account = {}, storage = null } = {}) 
   const routes = Array.isArray(relay.routes) ? relay.routes : [];
   routes.forEach((route, index) => {
     if (!['blocked', 'failed'].includes(route?.phase)) return;
+    if (route?.loginRequired === true || route?.stage === 'login_required') return;
     const kind = route.phase === 'failed' ? 'route_failed' : route.stage === 'send_uncertain' ? 'route_uncertain' : 'route_blocked';
     const ids = Array.isArray(route.uncertainIds) ? route.uncertainIds.map(clean).filter(Boolean).slice(-5) : [];
     events.push({ key: `route:${clean(route.key) || index}`, kind, subject: clean(route.name), stage: clean(route.stage), ids,
@@ -39,7 +40,7 @@ export function healthEvents({ relay = {}, account = {}, storage = null } = {}) 
   });
   if (relay.phase === 'failed' && !routes.length) events.push({ key: 'relay', kind: 'relay_failed', stage: clean(relay.stage), signature: `relay_failed|${relay.stage}` });
   const sources = Array.isArray(relay.sources) ? relay.sources : [];
-  if (account.phase === 'login_required' || sources.some(source => source?.loginRequired === true)) {
+  if (account.phase === 'login_required' || sources.some(source => source?.loginRequired === true) || routes.some(route => route?.loginRequired === true || route?.stage === 'login_required')) {
     events.push({ key: 'line:login', kind: 'line_login_required', signature: 'line_login_required' });
   }
   for (const source of sources) {

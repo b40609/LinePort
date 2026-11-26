@@ -13,3 +13,15 @@ export function requestNeverSent(error) {
   if (nested.length) return nested.every(item => unsentCode(item?.code));
   return unsentCode(error.code) || unsentCode(cause?.code);
 }
+
+// Coarse, loggable class of a failed request whose outcome is unknown ("timeout" or "network" plus a
+// fixed Node/undici error code). Like requestNeverSent, it never reads error messages.
+const SAFE_CODE = /^[A-Z][A-Z0-9_]{2,39}$/;
+export function networkFailure(error) {
+  if (!error) return { failure: 'unknown' };
+  if (error.name === 'TimeoutError' || error.name === 'AbortError') return { failure: 'timeout' };
+  const nested = Array.isArray(error.cause?.errors) ? error.cause.errors : Array.isArray(error.errors) ? error.errors : [];
+  const code = [error.code, error.cause?.code, ...nested.map(item => item?.code)].find(value => typeof value === 'string' && SAFE_CODE.test(value));
+  if (!code) return { failure: 'unknown' };
+  return { failure: /TIMEOUT|ETIMEDOUT/.test(code) ? 'timeout' : 'network', code };
+}

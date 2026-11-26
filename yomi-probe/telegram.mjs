@@ -5,7 +5,7 @@ import { mediaPayload, safeFileName, imageFileName, TELEGRAM_DOWNLOAD_LIMIT, MED
 import { readJournalFile, storageHealth } from './storage-health.mjs';
 import { destinationReply } from './reply-links.mjs';
 import { telegramThreadId } from './telegram-topics.mjs';
-import { requestNeverSent } from './network-errors.mjs';
+import { requestNeverSent, networkFailure } from './network-errors.mjs';
 import { splitTextChunks } from './text-chunk.mjs';
 export { requestNeverSent };
 export class TelegramRateLimit extends RelayError {
@@ -42,7 +42,10 @@ export function createTelegramClient(token, { request = fetch } = {}) {
         method: 'POST', headers, body,
         signal: AbortSignal.timeout(method === 'getUpdates' ? 25000 : file ? 110000 : 15000), redirect: 'error',
       });
-      const result = await response.json();
+      let result;
+      // A reply that cannot be read leaves the outcome unknown; keep the HTTP status for the failure log.
+      try { result = await response.json(); }
+      catch { throw Object.assign(new RelayError('Telegram 連線失敗或逾時；發送結果可能不明'), { failure: 'bad_response', status: response.status }); }
       if (!response.ok || !result.ok) {
         if (response.status === 429 && result.ok === false && result.error_code === 429
           && Number.isSafeInteger(result.parameters?.retry_after) && result.parameters.retry_after > 0
@@ -60,7 +63,7 @@ export function createTelegramClient(token, { request = fetch } = {}) {
       // Network exceptions can contain the token-bearing URL. Never return them.
       if (error instanceof RelayError) throw error;
       if (requestNeverSent(error)) throw new TelegramUnsent();
-      throw new RelayError('Telegram 連線失敗或逾時；發送結果可能不明');
+      throw Object.assign(new RelayError('Telegram 連線失敗或逾時；發送結果可能不明'), networkFailure(error));
     }
   }
   const confirmed = (id, threadId, result) => Number.isSafeInteger(result?.message_id) && result.message_id > 0
@@ -111,30 +114,33 @@ export function createTelegramClient(token, { request = fetch } = {}) {
         return { bytes, fileName: safeFileName(payload.fileName, 'file.bin') };
       } catch (error) {
         // Over-size and unsupported formats will never succeed; network failures may.
-        throw Object.assign(new RelayError('Telegram 附件下載或格式驗證失敗，尚未呼叫目的發送；待送紀錄已保留，請檢查來源附件與連線後停止並重新啟動'),
+        throw Object.assign(new RelayError('Telegram 附件下載或格式驗證失敗，尚未呼叫目的發送；待送紀錄已保留，會自動重試，持續失敗請檢查來源附件與連線'),
           { permanent: error?.permanent === true || error?.message === 'Download too large' });
       } finally { if (reader) { try { await reader.cancel(); } catch {} reader.releaseLock(); } }
     },
     async send(id, text, { replyTo, threadId, prepared } = {}) {
-      if (threadId !== undefined && !telegramThreadId(threadId)) throw new RelayError('Telegram 話題 ID 不正確，請停止並修改目的話題');
       let method = 'sendMessage', data = { chat_id: id, text }, file, followUp = '';
-      if (typeof text !== 'string') {
-        const payload = mediaPayload(text);
-        method = payload.kind === 'photo' ? 'sendPhoto' : 'sendDocument';
-        // Telegram captions stop at 1,024 characters; longer text follows as separate messages.
-        const caption = payload.caption.length <= 1024 ? payload.caption : '';
-        followUp = caption ? '' : payload.caption;
-        data = { chat_id: id, ...(caption ? { caption } : {}) };
-        if (payload.source === 'line') {
-          if (!Buffer.isBuffer(prepared?.bytes) || !prepared.bytes.length || typeof prepared.fileName !== 'string') throw new RelayError('附件未完成安全下載，尚未發送');
-          file = { field: payload.kind, bytes: prepared.bytes, fileName: prepared.fileName };
-        } else data[payload.kind] = payload.fileId;
-      } else if (!text || text.length > 4096) throw new RelayError('Telegram 文字含前綴後不可超過 4,096 字元');
-      if (threadId !== undefined) data.message_thread_id = threadId;
-      if (replyTo !== undefined) {
-        if (!destinationReply('telegram', String(id), replyTo)) throw new RelayError('Telegram 回覆對照不符目的聊天室，請停止並核對紀錄');
-        data.reply_parameters = { message_id: Number(replyTo.split(':')[1]), allow_sending_without_reply: true };
-      }
+      // Everything up to the first API call is a local check: a failure here means nothing was sent.
+      try {
+        if (threadId !== undefined && !telegramThreadId(threadId)) throw new RelayError('Telegram 話題 ID 不正確，請停止並修改目的話題');
+        if (typeof text !== 'string') {
+          const payload = mediaPayload(text);
+          method = payload.kind === 'photo' ? 'sendPhoto' : 'sendDocument';
+          // Telegram captions stop at 1,024 characters; longer text follows as separate messages.
+          const caption = payload.caption.length <= 1024 ? payload.caption : '';
+          followUp = caption ? '' : payload.caption;
+          data = { chat_id: id, ...(caption ? { caption } : {}) };
+          if (payload.source === 'line') {
+            if (!Buffer.isBuffer(prepared?.bytes) || !prepared.bytes.length || typeof prepared.fileName !== 'string') throw new RelayError('附件未完成安全下載，尚未發送');
+            file = { field: payload.kind, bytes: prepared.bytes, fileName: prepared.fileName };
+          } else data[payload.kind] = payload.fileId;
+        } else if (!text || text.length > 4096) throw new RelayError('Telegram 文字含前綴後不可超過 4,096 字元');
+        if (threadId !== undefined) data.message_thread_id = threadId;
+        if (replyTo !== undefined) {
+          if (!destinationReply('telegram', String(id), replyTo)) throw new RelayError('Telegram 回覆對照不符目的聊天室，請停止並核對紀錄');
+          data.reply_parameters = { message_id: Number(replyTo.split(':')[1]), allow_sending_without_reply: true };
+        }
+      } catch (error) { throw Object.assign(error instanceof RelayError ? error : new RelayError('Telegram 訊息內容無法組成，尚未發送'), { notSent: true }); }
       const first = confirmed(id, threadId, await call(method, data, file));
       if (!followUp || !first) return { id: first };
       // The attachment was accepted: any later failure leaves the whole item uncertain (never resend).

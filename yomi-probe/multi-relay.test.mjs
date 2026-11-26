@@ -183,21 +183,26 @@ test('fan-out reads a source once, filters history, and restart never duplicates
   assert.equal(line.calls.length, 2);
 });
 
-test('one uncertain destination pauses durably while other destinations and sources keep delivering', async () => {
+test('one uncertain destination resends once then pauses durably while other destinations and sources keep delivering', async () => {
   const directory = await fixture(), deliveries = [];
+  let clock = 1000;
   const line = adapter({ messages: [message('a'), message('b', 'second', 1200)], send: async (id, text) => {
     if (id === 'cbad') throw new Error('synthetic network timeout with private details');
     deliveries.push([id, text]); return { id: 'out-'+deliveries.length };
   } });
   const value = config(rule('r', [endpoint('cs')], [endpoint('cbad'), endpoint('cgood')]));
-  const relay = await createMultiRelay({ config: value, adapters: { line }, directory, now: () => 1000, pause: async () => {} });
+  const relay = await createMultiRelay({ config: value, adapters: { line }, directory, now: () => clock, pause: async () => {}, resendDelayMs: 1000 });
+  await relay.tick();
+  assert.equal(relay.state.routes[0].stage, 'resend_pending');
+  assert.equal(deliveries.length, 2);
+  clock += 1000;
   await relay.tick();
   assert.equal(relay.state.phase, 'degraded');
   assert.equal(relay.state.routes[0].phase, 'blocked');
   assert.equal(relay.state.uncertain, 1);
   assert.equal(deliveries.length, 2);
   assert.ok(!JSON.stringify(relay.state).includes('private details'));
-  const restarted = await createMultiRelay({ config: value, adapters: { line }, directory, now: () => 2000, pause: async () => {} });
+  const restarted = await createMultiRelay({ config: value, adapters: { line }, directory, now: () => clock + 2000, pause: async () => {}, resendDelayMs: 1000 });
   assert.equal(restarted.state.routes[0].phase, 'blocked');
   await restarted.tick();
   assert.equal(deliveries.length, 2);
@@ -305,20 +310,26 @@ test('sources sharing one destination send serially with spacing and a missing a
   const relay = await createMultiRelay({ config: config(rule('r', [endpoint('ca'), endpoint('cb')], [endpoint('cd')])), adapters: { line }, directory: await fixture(), now: () => 1000, pause: async ms => events.push(ms) });
   await relay.tick();
   assert.deepEqual(events, ['send', 1100, 'send']);
+  let clock1 = 1000;
   const uncertain = adapter({ messages: [message('input')], send: async () => ({}) });
-  const blocked = await createMultiRelay({ config: config(rule()), adapters: { line: uncertain }, directory: await fixture(), now: () => 1000 });
+  const blocked = await createMultiRelay({ config: config(rule()), adapters: { line: uncertain }, directory: await fixture(), now: () => clock1, pause: async () => {}, resendDelayMs: 1000 });
+  await blocked.tick();
+  clock1 += 1000;
   await blocked.tick();
   assert.equal(blocked.state.routes[0].phase, 'blocked');
   assert.equal(blocked.state.forwarded, 0);
   const mixedEvents = [];
-  let attempts = 0;
-  const mixed = adapter({ messages: [message('input')], send: async () => {
+  let clock2 = 1000, caAttempts = 0;
+  const mixed = adapter({ messages: [message('input')], send: async (_id, text) => {
     mixedEvents.push('send');
-    return ++attempts === 1 ? {} : { id: 'confirmed' };
+    if (text === 'hello' && caAttempts === 0 || text.startsWith('⚠️ 可能重複')) { caAttempts++; return {}; }
+    return { id: 'confirmed' };
   } });
-  const continuing = await createMultiRelay({ config: config(rule('r', [endpoint('ca'), endpoint('cb')], [endpoint('cd')])), adapters: { line: mixed }, directory: await fixture(), now: () => 1000, pause: async ms => mixedEvents.push(ms) });
+  const continuing = await createMultiRelay({ config: config(rule('r', [endpoint('ca'), endpoint('cb')], [endpoint('cd')])), adapters: { line: mixed }, directory: await fixture(), now: () => clock2, pause: async ms => mixedEvents.push(ms), resendDelayMs: 1000 });
   await continuing.tick();
   assert.deepEqual(mixedEvents, ['send', 1100, 'send']);
+  clock2 += 1000;
+  await continuing.tick();
   assert.equal(continuing.state.routes[0].phase, 'blocked');
   assert.equal(continuing.state.routes[1].phase, 'running');
   assert.equal(continuing.state.forwarded, 1);
@@ -402,7 +413,7 @@ test('a stalled source has a deadline, does not overlap reads, and leaves health
 
 test('a send exceeding its deadline is durably uncertain even if a late acknowledgement arrives', async t => {
   const directory = await fixture(), value = config(rule());
-  let sends = 0;
+  let clock = 1000, sends = 0;
   let release;
   const stalled = new Promise(resolve => { release = resolve; });
   t.after(() => release());
@@ -411,15 +422,17 @@ test('a send exceeding its deadline is durably uncertain even if a late acknowle
     await stalled;
     return { id: 'late' };
   } });
-  const relay = await createMultiRelay({ config: value, adapters: { line }, directory, now: () => 1000, operationTimeoutMs: 5 });
+  const relay = await createMultiRelay({ config: value, adapters: { line }, directory, now: () => clock, pause: async () => {}, operationTimeoutMs: 5, resendDelayMs: 1000 });
+  await relay.tick();
+  clock += 1000;
   await relay.tick();
   assert.equal(relay.state.routes[0].phase, 'blocked');
   assert.equal(relay.state.forwarded, 0);
   release();
   await new Promise(resolve => setImmediate(resolve));
-  const restarted = await createMultiRelay({ config: value, adapters: { line }, directory, now: () => 2000 });
+  const restarted = await createMultiRelay({ config: value, adapters: { line }, directory, now: () => clock + 2000, pause: async () => {}, resendDelayMs: 1000 });
   await restarted.tick();
-  assert.equal(sends, 1);
+  assert.equal(sends, 2);
   assert.equal(restarted.state.routes[0].phase, 'blocked');
 });
 
@@ -497,15 +510,22 @@ test('a Telegram request that never connected is retried with backoff instead of
   assert.equal(restarted.state.uncertain, 0);
 });
 
-test('timeouts, resets and a failure after a delivered chunk stay uncertain and expose only message IDs', async () => {
+test('timeouts, resets and a failure after a delivered chunk resend once, then stay uncertain and expose only message IDs', async () => {
   for (const [name, error, text] of [['timeout', Object.assign(new Error('x'), { name: 'TimeoutError' }), 'short'],
     ['reset', new RelayError('Telegram 連線失敗或逾時；發送結果可能不明'), 'short'],
     ['second chunk', new TelegramUnsent(), 'a'.repeat(9000)]]) {
     const directory = await fixture();
-    let attempts = 0;
-    const telegram = adapter({ send: async () => { if (++attempts === (name === 'second chunk' ? 2 : 1)) throw error; return { id: `-1:${attempts}` }; } });
-    const options = { config: config(rule('one', [endpoint('cs')], [endpoint('-1', 'telegram')])), adapters: { line: adapter({ messages: [message('m-1', text)] }), telegram }, directory, now: () => 1000, pause: async () => {} };
+    let clock = 1000, attempts = 0;
+    const telegram = adapter({ send: async () => {
+      attempts++;
+      if (name === 'second chunk' ? attempts % 2 === 0 : true) throw error;
+      return { id: `-1:${attempts}` };
+    } });
+    const options = { config: config(rule('one', [endpoint('cs')], [endpoint('-1', 'telegram')])), adapters: { line: adapter({ messages: [message('m-1', text)] }), telegram }, directory, now: () => clock, pause: async () => {}, resendDelayMs: 1000 };
     const relay = await createMultiRelay(options);
+    await relay.tick();
+    assert.equal(relay.state.routes[0].stage, 'resend_pending', name);
+    clock += 1000;
     await relay.tick();
     assert.equal(relay.state.routes[0].phase, 'blocked', name);
     assert.equal(relay.state.routes[0].stage, 'send_uncertain', name);

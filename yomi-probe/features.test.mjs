@@ -97,11 +97,11 @@ test('write failure before queue checkpoint prevents send and source checkpoint 
   const restarted = await createMultiRelay({ config, adapters: { line }, directory: folder, now: () => 2000 });
   await restarted.tick(); assert.equal(line.calls.length, 1);
 });
-test('killing a separate synthetic process after sending checkpoint blocks restart without resend', async () => {
+test('killing a separate synthetic process after a second sending checkpoint blocks restart without resend', async () => {
   const folder = await directory(), line = adapter(), config = { version: 1, rules: [rule()] };
   await createMultiRelay({ config, adapters: { line }, directory: folder, now: () => 1000 });
   const file = path.join(folder, (await readdir(folder)).find(name => name.startsWith('lineport-route-')));
-  const source = `import { appendRecord } from ${JSON.stringify(new URL('./relay-core.mjs', import.meta.url).href)}; await appendRecord(process.argv[1], {id:'a', outcome:'queued', text:'SYNTHETIC'}); await appendRecord(process.argv[1], {id:'a', outcome:'sending'}); process.send('saved'); setInterval(()=>{},1000);`;
+  const source = `import { appendRecord } from ${JSON.stringify(new URL('./relay-core.mjs', import.meta.url).href)}; await appendRecord(process.argv[1], {id:'a', outcome:'queued', text:'SYNTHETIC'}); await appendRecord(process.argv[1], {id:'a', outcome:'sending'}); await appendRecord(process.argv[1], {id:'a', outcome:'uncertain'}); await appendRecord(process.argv[1], {id:'a', outcome:'sending', resend:true}); process.send('saved'); setInterval(()=>{},1000);`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', source, file], { windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   try { await once(child, 'message'); const exited = once(child, 'exit'); child.kill(); await exited; }
   finally { if (child.exitCode === null && child.signalCode === null) child.kill(); }

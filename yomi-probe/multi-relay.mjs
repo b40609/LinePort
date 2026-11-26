@@ -1,11 +1,14 @@
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import { appendRecord, loadJournal, establishBaseline } from './relay-core.mjs';
 import { unseenText } from './relay-rules.mjs';
 import { createSettingsStore, configRevision, endpointKey, chatKey, matchingContent, textRejection } from './route-config.mjs';
 import { lineDirectory, readLineSince, LineHistoryError } from './line-directory.mjs';
 import { ProtocolReadError } from './protocol-guard.mjs';
-import { requireRelayEncryption, inspectRelayRead, relayFailure, RelayError, destinationEncryptionFailure } from './relay-health.mjs';
+import { requireRelayEncryption, inspectRelayRead, relayFailure, RelayError, destinationEncryptionFailure, FAILURE_KINDS } from './relay-health.mjs';
+import { networkFailure } from './network-errors.mjs';
+import { formatTime } from './health-alert.mjs';
 import { sendRelayText, prepareRelayDestination } from './relay-send.mjs';
 import { createTelegramClient, createTelegramInbox, TelegramRateLimit } from './telegram.mjs';
 import { createDiscordClient, DiscordRateLimit } from './discord.mjs';
@@ -36,7 +39,27 @@ async function rowsFrom(file) {
     return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
   } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
-export async function createMultiRelay({ config, adapters, platformErrors = {}, directory, now = Date.now, pause = sleep, operationTimeoutMs = 30000, queueLimit = 1000, deliveryBudget = 10, writeRecord = appendRecord }) {
+// Why a failed send failed, as a fixed word for the journal and the per-route counters (never the error text).
+function failureKind(error) {
+  if (error instanceof TelegramRateLimit || error instanceof DiscordRateLimit) return 'rate_limit';
+  if (error?.unsent === true) return 'unsent';
+  if (error?.rejected === true) return error.status >= 400 && error.status < 500 ? 'rejected' : 'server_error';
+  if (error?.notSent === true) return 'not_sent';
+  if (error instanceof OperationTimeout) return 'timeout';
+  if (['timeout', 'network', 'bad_response'].includes(error?.failure)) return error.failure;
+  if (error?.message === 'Missing acknowledgement') return 'no_ack';
+  return networkFailure(error).failure;
+}
+// Only fixed, non-identifying details reach the journal: HTTP status and a Node error code.
+function failureDetail(error) {
+  const code = typeof error?.code === 'string' ? error.code : networkFailure(error).code;
+  return { ...(Number.isSafeInteger(error?.status) && error.status >= 100 && error.status <= 599 ? { status: error.status } : {}),
+    ...(typeof code === 'string' && /^[A-Z][A-Z0-9_]{2,39}$/.test(code) ? { code } : {}) };
+}
+// The platform answered with a client error, or a local check failed before any request: nothing was delivered.
+const definitelyNotSent = error => error?.notSent === true || error?.rejected === true && error.status >= 400 && error.status < 500;
+
+export async function createMultiRelay({ config, adapters, platformErrors = {}, directory, now = Date.now, pause = sleep, operationTimeoutMs = 30000, queueLimit = 1000, deliveryBudget = 10, writeRecord = appendRecord, resendDelayMs = 30000 }) {
   if (!Number.isSafeInteger(queueLimit) || queueLimit < 1 || !Number.isSafeInteger(deliveryBudget) || deliveryBudget < 1) throw new Error('Invalid queue limits');
   const cursors = new Map();
   const cooldowns = new Map(), cooldownNotes = new Map();
@@ -54,7 +77,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
   for (const rule of config.rules.filter(rule => rule.enabled)) for (const source of rule.sources) for (const destination of rule.destinations) {
     const sourceKey = endpointKey(source), destinationKey = endpointKey(destination);
     const status = { key: digest([sourceKey, destinationKey]).slice(0, 24), ruleId: rule.id, name: rule.name, source, destination,
-      phase: 'starting', stage: 'baseline', forwarded: 0, uncertain: 0, errors: 0, skipped: 0, deduplicated: 0, quarantined: 0, pending: 0, lastSend: null, warning: '' };
+      phase: 'starting', stage: 'baseline', forwarded: 0, uncertain: 0, errors: 0, skipped: 0, deduplicated: 0, quarantined: 0, resent: 0, retrying: 0, failures: {}, pending: 0, lastSend: null, warning: '' };
     state.routes.push(status);
     const edge = { rule, source, destination, status, seen: new Set(), startedAt: now() };
     edges.push(edge);
@@ -75,22 +98,37 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
       edge.pending = saved.pending;
       edge.replies = saved.replies;
       edge.delivered = saved.delivered;
+      status.failures = { ...saved.failures };
       cooldowns.set(destination.platform, Math.max(cooldowns.get(destination.platform) || 0, saved.retryAt));
       status.pending = edge.pending.size;
       edge.startedAt = saved.startedAt || now();
       status.stage = 'journal';
       if (!saved.routeIdentity) await edge.record({ routeIdentity: identity, name: rule.name, source, destination });
+      // A stalled route writes nothing more, so the journal's last write approximates the first attempt's time.
+      let stalledAt = 0;
+      try { stalledAt = Math.floor((await stat(edge.file)).mtimeMs); } catch {}
       const reviewed = await inspectDelivery(directory, identity);
       const unresolved = reviewed.unresolved;
       edge.pending = reviewed.pending;
+      edge.doubts = reviewed.doubts; edge.times = reviewed.times; edge.uncertainAt = reviewed.uncertainAt;
       // A manual fast-forward treats everything before the decision as history for this route.
       if (reviewed.fastForwardAt > edge.startedAt) { edge.startedAt = reviewed.fastForwardAt; status.fastForwardAt = new Date(reviewed.fastForwardAt).toISOString(); }
       status.pending = edge.pending.size;
       if (reviewed.quarantined.length) { status.quarantined = reviewed.quarantined.length; status.quarantineIds = reviewed.quarantined.slice(-5).map(row => row.id); }
-      if (unresolved.size) {
-        status.phase = 'blocked'; status.stage = 'send_uncertain'; status.uncertain = unresolved.size; status.uncertainIds = [...unresolved].slice(0, 5);
-        status.warning = '有發送結果不明的訊息，已暫停此路線；請停止轉送，到人工處理逐筆核對。重啟不會自動重送。';
+      // User decision 2026-11-27 (SECURITY.md): a text whose single attempt ended unknown is resent once,
+      // marked as a possible duplicate. Attachments, and a text whose resend was unknown too, wait for a person.
+      const manual = [...unresolved].filter(id => !resendable(edge, id));
+      if (manual.length) {
+        status.phase = 'blocked'; status.stage = 'send_uncertain'; status.uncertain = unresolved.size; status.uncertainIds = [...manual, ...[...unresolved].filter(id => !manual.includes(id))].slice(0, 5);
+        status.warning = '有發送結果不明的訊息，已暫停此路線；請停止轉送，到人工處理逐筆核對。附件與已自動重送過一次的文字不會再自動重送。';
         continue;
+      }
+      if (unresolved.size) {
+        for (const id of unresolved) if (!edge.uncertainAt.has(id) && stalledAt) edge.uncertainAt.set(id, stalledAt);
+        holdForResend(edge);
+        status.retryAt = edge.holdUntil;
+        status.retrying = 1;
+        status.warning = edge.holdNote;
       }
       status.stage = destination.platform === 'line' ? 'destination_e2ee' : 'destination_prepare';
       if (!preparations.has(destinationKey)) preparations.set(destinationKey, withDeadline(to.prepare(destination.id, destination), operationTimeoutMs));
@@ -107,7 +145,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         status.stage = 'journal';
         await establishBaseline({ messages: baseline, startedAt: edge.startedAt, record: edge.record, seen: edge.seen });
       }
-      status.phase = 'running'; status.stage = 'waiting';
+      status.phase = 'running'; status.stage = edge.holdStage || 'waiting';
     } catch (error) {
       status.phase = 'failed'; status.errors++;
       if (status.stage === 'destination_e2ee') Object.assign(status, destinationEncryptionFailure(error instanceof OperationTimeout ? { name: 'TimeoutError' } : error));
@@ -150,6 +188,34 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     edge.status.quarantined++; edge.status.quarantinedSinceStart = (edge.status.quarantinedSinceStart || 0) + 1; edge.status.quarantineIds = [...(edge.status.quarantineIds || []), id].slice(-5);
     edge.status.stage = 'waiting';
     return true;
+  }
+  function resendable(edge, id) { return typeof edge.pending.get(id) === 'string' && edge.doubts.get(id) === 1; }
+  function recordFailure(edge, kind) {
+    const safe = FAILURE_KINDS.includes(kind) ? kind : 'unknown';
+    edge.status.failures[safe] = (edge.status.failures[safe] || 0) + 1;
+  }
+  function clearHold(edge) { edge.holdUntil = 0; edge.holdFailures = 0; edge.holdNote = ''; edge.holdStage = ''; }
+  // Nothing was delivered: keep the item queued and try again later (5 s doubling to 5 min) instead of
+  // stopping the route. The health monitor alerts once the same item has failed three times in a row.
+  function defer(edge, error, stage) {
+    edge.holdFailures = (edge.holdFailures || 0) + 1;
+    edge.holdUntil = now() + Math.min(300000, 5000 * 2 ** Math.min(edge.holdFailures - 1, 6));
+    edge.holdStage = stage;
+    edge.holdNote = `${error instanceof RelayError ? error.message : relayFailure(stage)}；訊息確定尚未送出，待送已保留，自動重試中（連續第 ${edge.holdFailures} 次）`;
+    edge.status.errors++;
+  }
+  function holdForResend(edge) {
+    edge.holdUntil = now() + resendDelayMs; edge.holdFailures = 0; edge.holdStage = 'resend_pending';
+    edge.holdNote = '發送結果不明；稍後會加註「可能重複」自動重送一次，重送結果仍不明才暫停';
+  }
+  function settleAttempt(edge, id) {
+    const doubt = (edge.doubts.get(id) || 0) - 1;
+    if (doubt > 0) edge.doubts.set(id, doubt); else edge.doubts.delete(id);
+  }
+  // First line of the one automatic resend, so readers can tell a possible duplicate from a new message.
+  function duplicateNotice(edge, id) {
+    const sourceTime = edge.times.get(id), firstTry = edge.uncertainAt.get(id);
+    return `⚠️ 可能重複：前一次發送結果不明，系統自動重送一次（${sourceTime ? `原訊息時間 ${formatTime(sourceTime)}` : firstTry ? `原訊息時間不明，首次發送約 ${formatTime(firstTry)}` : '原訊息時間不明'}）`;
   }
   refresh();
   async function tick({ sourceKeys = [...sources.keys()], deliver = true } = {}) {
@@ -202,6 +268,11 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         batches.set(key, filtered);
         // Any message some live route has not handled yet counts as activity for adaptive polling.
         if (live.some(edge => unseenText(filtered, edge.seen, edge.startedAt, edge.rule.media).length)) source.lastNewAt = now();
+        // Items queued by an older release carry no source time; pick it up while the message is still readable.
+        for (const edge of live) for (const message of messages) {
+          const id = String(message?.id), time = Number(message?.createdTime || message?.deliveredTime);
+          if (edge.pending.has(id) && !edge.times.has(id) && Number.isSafeInteger(time) && time > 0) edge.times.set(id, time);
+        }
         for (const edge of live) {
           edge.status.lastRead = inspectRelayRead(filtered, edge.seen, edge.startedAt, edge.rule.media);
           const candidates = unseenText(filtered, edge.seen, edge.startedAt, edge.rule.media);
@@ -248,7 +319,9 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
           if (rejection) content = mediaNotice(text, rejection);
           const parent = edge.rule.replies ? sourceReply(message, edge.source.platform, edge.source.id) : null;
           const reply = parent ? { replyVersion: 1, replyTo: parent } : {};
-          await edge.record(typeof content === 'string' ? { id, outcome: 'queued', text: content, ...reply } : { id, outcome: 'media_queued', payloadVersion: payloadVersion(content), payload: content, ...reply });
+          const sourceTime = Number(message.createdTime || message.deliveredTime), time = Number.isSafeInteger(sourceTime) && sourceTime > 0 ? { time: sourceTime } : {};
+          await edge.record(typeof content === 'string' ? { id, outcome: 'queued', text: content, ...reply, ...time } : { id, outcome: 'media_queued', payloadVersion: payloadVersion(content), payload: content, ...reply, ...time });
+          if (time.time) edge.times.set(id, time.time);
           if (parent) edge.replies.set(id, parent);
           edge.pending.set(id, content); edge.seen.add(id);
         }
@@ -274,15 +347,17 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
         let edge;
         for (let scan = 0; scan < group.length; scan++) {
           const candidate = group[cursor++ % group.length];
-          if (candidate.status.phase === 'running' && candidate.pending.size && inSchedule(candidate.rule.schedule, now()) && !(cooldowns.get(candidate.destination.platform) > now())) { edge = candidate; break; }
+          if (candidate.status.phase === 'running' && candidate.pending.size && inSchedule(candidate.rule.schedule, now()) && !(cooldowns.get(candidate.destination.platform) > now()) && !(candidate.holdUntil > now())) { edge = candidate; break; }
         }
         if (!edge) break;
         const status = edge.status;
         try {
           {
-            const [id, text] = edge.pending.entries().next().value;
+            const [id, rawPayload] = edge.pending.entries().next().value;
+            const isResend = resendable(edge, id);
+            const text = isResend ? `${duplicateNotice(edge, id)}\n${rawPayload}` : rawPayload;
             if (attempted) await pause(1100);
-            if (cooldowns.get(edge.destination.platform) > now() || !inSchedule(edge.rule.schedule, now())) break;
+            if (cooldowns.get(edge.destination.platform) > now() || edge.holdUntil > now() || !inSchedule(edge.rule.schedule, now())) break;
             status.stage = 'prepare';
             // Attachments may take longer to download and upload than a text message.
             const deadline = typeof text === 'string' ? operationTimeoutMs : operationTimeoutMs * 4;
@@ -291,12 +366,34 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
               prepared = adapters[edge.destination.platform].preparePayload
                 ? await withDeadline(adapters[edge.destination.platform].preparePayload(text), deadline) : undefined;
             } catch (error) {
-              // Nothing was sent yet: an attachment that can never be prepared is quarantined, others pause the route.
-              if (await quarantine(edge, id, error, 'prepare')) continue;
-              throw error;
+              recordFailure(edge, failureKind(error));
+              // Nothing was sent yet: an attachment that can never be prepared is quarantined; definite auth/config
+              // errors stop cleanly; transient download failures back off (5 s doubling to 5 min) up to 6 attempts.
+              if (await quarantine(edge, id, error, 'prepare')) { clearHold(edge); continue; }
+              if (error?.loginRequired === true || definitelyNotSent(error)) {
+                clearHold(edge);
+                status.phase = 'failed';
+                status.stage = error?.loginRequired === true ? 'login_required' : error?.rejected === true ? 'destination_rejected' : 'prepare';
+                if (error?.loginRequired === true) status.loginRequired = true;
+                status.errors++;
+                status.warning = `${error instanceof RelayError ? error.message : relayFailure(status.stage)}；訊息確定尚未送出，待送已保留，排除問題後重新啟動即可續送。`;
+                continue;
+              }
+              defer(edge, error, 'prepare');
+              if (edge.holdFailures >= 6) {
+                const note = error instanceof RelayError ? error.message : relayFailure('prepare');
+                clearHold(edge);
+                status.phase = 'failed'; status.stage = 'prepare';
+                status.warning = `${note}；連續重試 6 次仍失敗，已暫停此路線，請檢查來源附件與連線後重新啟動。`;
+              } else {
+                status.stage = 'waiting';
+              }
+              continue;
             }
             status.stage = 'journal';
-            await edge.record({ id, outcome: 'sending' }); edge.seen.add(id);
+            await edge.record({ id, outcome: 'sending', ...(isResend ? { resend: true } : {}) });
+            edge.doubts.set(id, (edge.doubts.get(id) || 0) + 1);
+            edge.seen.add(id);
             status.stage = 'send';
             const parent = edge.replies.get(id);
             const replyTo = edge.rule.replies && parent ? destinationReply(edge.destination.platform, edge.destination.id, edge.delivered.get(parent)) : undefined;
@@ -310,7 +407,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
               let firstResult = null;
               const allOutputIds = [];
               for (let i = 0; i < chunks.length; i++) {
-                if (i > 0) await pause(300);
+                if (i > 0) await pause(1100);
                 const currentText = chunks[i];
                 const currentReply = i === 0 ? replyTo : undefined;
                 const controller = new AbortController();
@@ -326,31 +423,66 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
               }
               result = { id: firstResult.id, ids: allOutputIds };
             } catch (error) {
-              if (edge.destination.platform === 'telegram' && error instanceof TelegramRateLimit || edge.destination.platform === 'discord' && error instanceof DiscordRateLimit) {
+              if ((edge.destination.platform === 'telegram' && error instanceof TelegramRateLimit || edge.destination.platform === 'discord' && error instanceof DiscordRateLimit) && deliveredChunks === 0) {
+                recordFailure(edge, 'rate_limit');
+                settleAttempt(edge, id);
                 const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + error.retryAfterMs);
-                await edge.record({ id, outcome: 'retry', retryAt });
+                await edge.record({ id, outcome: 'retry', retryAt, failure: 'rate_limit' });
                 cooldowns.set(edge.destination.platform, retryAt);
                 cooldownNotes.delete(edge.destination.platform);
                 status.stage = 'waiting';
                 break;
               }
               // A definite per-message rejection with nothing delivered is quarantined, never retried or resent.
-              if (error?.rejected === true && deliveredChunks === 0 && await quarantine(edge, id, error, 'send')) continue;
+              if (error?.rejected === true && deliveredChunks === 0 && await quarantine(edge, id, error, 'send')) {
+                recordFailure(edge, 'rejected');
+                edge.doubts.delete(id); clearHold(edge);
+                continue;
+              }
               // Only a request that provably never left this machine may be retried; any delivered chunk
-              // means a retry would duplicate it, so that case stays uncertain.
+              // means a retry would duplicate it without a notice, so that case falls through to uncertain.
               if (error?.unsent === true && deliveredChunks === 0) {
+                recordFailure(edge, 'unsent');
+                settleAttempt(edge, id);
                 edge.unsentFailures = (edge.unsentFailures || 0) + 1;
                 const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + Math.min(300000, 5000 * 2 ** Math.min(edge.unsentFailures - 1, 6)));
-                await edge.record({ id, outcome: 'retry', retryAt });
+                await edge.record({ id, outcome: 'retry', retryAt, failure: 'unsent', ...failureDetail(error) });
                 cooldowns.set(edge.destination.platform, retryAt);
                 cooldownNotes.set(edge.destination.platform, error.message);
                 status.stage = 'waiting';
                 break;
               }
-              status.uncertain++; status.uncertainIds = [...(status.uncertainIds || []), id].slice(-5); status.stage = 'send_uncertain'; status.phase = 'blocked';
-              status.warning = (error instanceof RelayError ? error.message + '；' : '') + '發送結果不明，已暫停此路線，請核對目的訊息；其他路線繼續。';
-              await edge.record({ id, outcome: 'uncertain' });
-              throw error;
+              // Pre-send validation failures and chat/auth 4xx rejections delivered nothing: resolve the sending
+              // row with a retry record, fail the route for attention, and keep the item queued verbatim.
+              if ((definitelyNotSent(error) || error?.loginRequired === true) && deliveredChunks === 0) {
+                const kind = failureKind(error);
+                recordFailure(edge, kind);
+                settleAttempt(edge, id); clearHold(edge);
+                await edge.record({ id, outcome: 'retry', retryAt: Math.max(1, now()), failure: kind, ...failureDetail(error) });
+                status.phase = 'failed';
+                status.stage = error?.loginRequired === true ? 'login_required' : error?.rejected === true ? 'destination_rejected' : 'send_not_sent';
+                if (error?.loginRequired === true) status.loginRequired = true;
+                status.errors++;
+                status.warning = `${error instanceof RelayError ? error.message : relayFailure(status.stage)}；訊息確定尚未送出，待送已保留，排除問題後重新啟動即可續送。`;
+                continue;
+              }
+              const kind = failureKind(error), at = now();
+              recordFailure(edge, kind);
+              if (!edge.uncertainAt.has(id)) edge.uncertainAt.set(id, at);
+              await edge.record({ id, outcome: 'uncertain', at, failure: kind, ...failureDetail(error) });
+              if (resendable(edge, id)) {
+                holdForResend(edge);
+                status.errors++;
+                status.stage = 'resend_pending';
+                continue;
+              }
+              clearHold(edge);
+              status.uncertain = edge.doubts.size;
+              status.uncertainIds = [...edge.doubts.keys()].slice(-5);
+              status.stage = 'send_uncertain'; status.phase = 'blocked'; status.errors++;
+              status.warning = (error instanceof RelayError ? error.message + '；' : '')
+                + (typeof rawPayload === 'string' ? '自動重送一次後結果仍不明，已暫停此路線，請核對目的訊息；其他路線繼續。' : '附件發送結果不明，已暫停此路線，請核對目的訊息（附件不自動重送）；其他路線繼續。');
+              continue;
             }
             status.stage = 'journal';
             for (const outputId of new Set([result.id, ...(result.ids || [])])) {
@@ -358,10 +490,11 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
               await writeRecord(outputFile, { key }); outputs.add(key);
             }
             const acknowledged = destinationReply(edge.destination.platform, edge.destination.id, result.id);
-            await edge.record({ id, outcome: 'sent', ...(acknowledged ? { destinationId: acknowledged } : {}) });
+            await edge.record({ id, outcome: 'sent', ...(acknowledged ? { destinationId: acknowledged } : {}), ...(isResend ? { resent: true } : {}) });
             if (acknowledged) edge.delivered.set(id, acknowledged);
-            edge.pending.delete(id); edge.unsentFailures = 0; edge.quarantineStreak = 0;
-            status.forwarded++; status.lastSend = new Date(now()).toISOString();
+            edge.pending.delete(id); edge.doubts.delete(id); edge.times.delete(id); edge.uncertainAt.delete(id);
+            clearHold(edge); edge.unsentFailures = 0; edge.quarantineStreak = 0;
+            status.forwarded++; if (isResend) status.resent++; status.lastSend = new Date(now()).toISOString();
           }
           status.stage = 'waiting';
         } catch (error) {
@@ -378,10 +511,24 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     for (const edge of edges) {
       if (!edge.pending) continue;
       edge.status.pending = edge.pending.size;
-      edge.status.retryAt = cooldowns.get(edge.destination.platform) > now() ? cooldowns.get(edge.destination.platform) : 0;
-      if (edge.status.phase === 'running') edge.status.warning = cooldowns.get(edge.destination.platform) > now()
-        ? cooldownNotes.get(edge.destination.platform) || `${edge.destination.platform === 'discord' ? 'Discord' : 'Telegram'} 限流中，待送訊息已保存，等待後自動重試` : edge.pending.size && !inSchedule(edge.rule.schedule, now()) ? '時段外，已保留待送；進入時段後自動處理' : edge.pending.size >= Math.ceil(queueLimit * 0.8)
-        ? `待送佇列接近容量（${edge.pending.size}/${queueLimit}）；未入列的訊息將於後續補讀` : capacity.warning;
+      const platformRetry = cooldowns.get(edge.destination.platform) > now() ? cooldowns.get(edge.destination.platform) : 0;
+      const holdRetry = edge.holdUntil > now() ? edge.holdUntil : 0;
+      edge.status.retryAt = Math.max(platformRetry, holdRetry);
+      edge.status.retrying = holdRetry || platformRetry && edge.pending.size ? 1 : 0;
+      if (edge.status.phase === 'running') {
+        if (holdRetry) {
+          edge.status.warning = edge.holdNote;
+          if (edge.holdStage === 'resend_pending') edge.status.stage = 'resend_pending';
+        } else if (platformRetry) {
+          edge.status.warning = cooldownNotes.get(edge.destination.platform) || `${edge.destination.platform === 'discord' ? 'Discord' : 'Telegram'} 限流中，待送訊息已保存，等待後自動重試`;
+        } else if (edge.pending.size && !inSchedule(edge.rule.schedule, now())) {
+          edge.status.warning = '時段外，已保留待送；進入時段後自動處理';
+        } else if (edge.pending.size >= Math.ceil(queueLimit * 0.8)) {
+          edge.status.warning = `待送佇列接近容量（${edge.pending.size}/${queueLimit}）；未入列的訊息將於後續補讀`;
+        } else {
+          edge.status.warning = capacity.warning;
+        }
+      }
     }
     refresh();
   }
@@ -432,10 +579,16 @@ export async function createLineRelayAdapter(service, endpoints, { downloadPhoto
     preparePayload: text => typeof text === 'string' ? undefined : text.source === 'line' ? downloadLineMedia(service, text) : downloadMedia
       ? downloadMedia(text) : Promise.reject(new RelayError('Telegram 附件來源未連結，待送已保留；請重新連結平台')),
     send(id, text, options = {}) {
-      check(id);
-      if (!protection.has(id)) throw new RelayError('目的聊天室尚未完成準備，請停止後重新啟動轉送');
+      try {
+        check(id);
+        if (!protection.has(id)) throw new RelayError('目的聊天室尚未完成準備，請停止後重新啟動轉送');
+        if (typeof text !== 'string' && protection.get(id) === 'transport') {
+          throw new RelayError('Bot 群組相容模式目前僅支援文字；請關閉此規則的圖片／檔案，或另建純文字規則');
+        }
+      } catch (error) {
+        throw Object.assign(error, { notSent: true });
+      }
       if (typeof text === 'string') return sendRelayText(service, id, text, { ...options, transportOnly: protection.get(id) === 'transport' });
-      if (protection.get(id) === 'transport') throw new RelayError('Bot 群組相容模式目前僅支援文字；請關閉此規則的圖片／檔案，或另建純文字規則');
       return sendLineMedia(service, id, text, options.prepared, options);
     },
   };

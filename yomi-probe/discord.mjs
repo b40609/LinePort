@@ -1,6 +1,6 @@
 import { RelayError } from './relay-health.mjs';
 import { destinationReply } from './reply-links.mjs';
-import { requestNeverSent } from './network-errors.mjs';
+import { requestNeverSent, networkFailure } from './network-errors.mjs';
 import { mediaPayload, safeFileName, DESTINATION_LIMITS } from './media-payload.mjs';
 import { splitTextChunks } from './text-chunk.mjs';
 
@@ -26,7 +26,9 @@ export function createDiscordClient(token, { request = fetch } = {}) {
       const response = await request(`https://discord.com/api/v10${route}`, {
         method: data === undefined ? 'GET' : 'POST', headers, body, signal: AbortSignal.timeout(file ? 110000 : 15000), redirect: 'error',
       });
-      const result = await response.json();
+      let result;
+      try { result = await response.json(); }
+      catch { throw Object.assign(new RelayError('Discord 連線失敗或回應無法確認；發送結果可能不明'), { failure: 'bad_response', status: response.status }); }
       if (!response.ok) {
         if (response.status === 429 && typeof result.retry_after === 'number' && Number.isFinite(result.retry_after) && result.retry_after > 0 && result.retry_after <= 2147483 && typeof result.global === 'boolean') throw new DiscordRateLimit(result.retry_after);
         // Invalid form body (50035), empty message (50006), payload or file too large (40005, 50045, 413) concern this message only.
@@ -39,7 +41,7 @@ export function createDiscordClient(token, { request = fetch } = {}) {
     } catch (error) {
       if (error instanceof RelayError) throw error;
       if (requestNeverSent(error)) throw new DiscordUnsent();
-      throw new RelayError('Discord 連線失敗或回應無法確認；發送結果可能不明');
+      throw Object.assign(new RelayError('Discord 連線失敗或回應無法確認；發送結果可能不明'), networkFailure(error));
     }
   }
   const check = id => { if (!discordId(id)) throw new RelayError('Discord 頻道 ID 格式不正確'); };
@@ -52,18 +54,21 @@ export function createDiscordClient(token, { request = fetch } = {}) {
       return channel;
     },
     async send(id, text, { replyTo, prepared } = {}) {
-      check(id);
-      if (replyTo !== undefined && !destinationReply('discord', id, replyTo)) throw new RelayError('Discord 回覆對照格式不正確，請停止並核對紀錄');
+      // Local checks before any API call: a failure here means nothing was sent.
+      const unsent = message => Object.assign(new RelayError(message), { notSent: true });
+      try { check(id); } catch (error) { throw Object.assign(error, { notSent: true }); }
+      if (replyTo !== undefined && !destinationReply('discord', id, replyTo)) throw unsent('Discord 回覆對照格式不正確，請停止並核對紀錄');
       const reference = replyTo ? { message_reference: { message_id: replyTo, channel_id: id, fail_if_not_exists: false } } : {};
       if (typeof text === 'string') {
-        if (!text.trim() || text.length > 2000) throw new RelayError('Discord 文字含前綴後不可超過 2,000 字元；請縮短內容或改選目的');
+        if (!text.trim() || text.length > 2000) throw unsent('Discord 文字含前綴後不可超過 2,000 字元；請縮短內容或改選目的');
         const result = await call(`/channels/${id}/messages`, { content: text, allowed_mentions: MENTIONS, flags: 4, ...reference });
         return { id: acknowledged(id, result) };
       }
-      const payload = mediaPayload(text);
+      let payload;
+      try { payload = mediaPayload(text); } catch { throw unsent('Discord 附件內容無法組成，尚未發送'); }
       const limit = DESTINATION_LIMITS.discord[payload.kind];
       if (!Buffer.isBuffer(prepared?.bytes) || !prepared.bytes.length || prepared.bytes.length > limit
-        || typeof prepared.fileName !== 'string' || safeFileName(prepared.fileName, '') !== prepared.fileName) throw new RelayError(`附件未完成安全下載或超過 Discord ${limit / 1000000} MB 上限，尚未發送`);
+        || typeof prepared.fileName !== 'string' || safeFileName(prepared.fileName, '') !== prepared.fileName) throw unsent(`附件未完成安全下載或超過 Discord ${limit / 1000000} MB 上限，尚未發送`);
       // Captions longer than one Discord message follow the attachment as separate messages.
       const inline = payload.caption.length <= 2000 ? payload.caption : '';
       const first = acknowledged(id, await call(`/channels/${id}/messages`, { ...(inline ? { content: inline } : {}), allowed_mentions: MENTIONS, flags: 4, ...reference },

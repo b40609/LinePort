@@ -22,32 +22,34 @@ const value = () => normalizeConfig({ version: 1, rules: sources.map((source, in
 test('twelve pairs isolate LINE uncertainty, persist Telegram cooldown, and recover while sources are offline', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-isolation-'));
   const calls = [], accepted = [], config = value();
-  let clock = 1000, limited = false, uncertain = false, offline = false;
+  let clock = 1000, limited = false, offline = false;
   const adapter = platform => ({ identity: 'synthetic-' + platform, prepare: async () => {}, recent: async () => [],
     read: async id => { if (offline) throw new Error('synthetic disconnected');
       return [{ id: id + ':notice', from: platform === 'line' ? 'usender1' : '123', text: '公告', createdTime: 1100 }]; },
     send: async (id, text) => {
       calls.push([platform, id, text]);
       if (platform === 'telegram' && !limited) { limited = true; throw new TelegramRateLimit(5); }
-      if (platform === 'line' && id === 'creaders1' && !uncertain) { uncertain = true; throw new Error('synthetic lost acknowledgement'); }
+      if (platform === 'line' && id === 'creaders1' && text.includes('[來源0]')) throw new Error('synthetic lost acknowledgement');
       accepted.push([platform, id, text]); return { id: 'synthetic-output-' + accepted.length };
     } });
-  const options = { config, adapters: { line: adapter('line'), telegram: adapter('telegram') }, directory, now: () => clock, pause: async () => {} };
+  const options = { config, adapters: { line: adapter('line'), telegram: adapter('telegram') }, directory, now: () => clock, pause: async () => {}, resendDelayMs: 1000 };
   const relay = await createMultiRelay(options); await relay.tick();
+  clock = 2000; await relay.tick();
   assert.equal(relay.state.routes.filter(route => route.phase === 'blocked').length, 1);
   assert.equal(accepted.filter(row => row[0] === 'line').length, 5);
   // Another destination may already be in flight when the first 429 arrives.
   const acceptedBeforeRestart = accepted.length;
   const attemptsBeforeRestart = calls.filter(row => row[0] === 'telegram').length;
   assert.ok(attemptsBeforeRestart <= 2);
-  const blockedText = calls.find(row => row[0] === 'line' && row[1] === 'creaders1')[2];
+  const blockedCalls = calls.filter(row => row[0] === 'line' && row[1] === 'creaders1' && row[2].includes('[來源0]')).length;
+  assert.equal(blockedCalls, 2);
   offline = true;
   const restarted = await createMultiRelay(options); await restarted.tick();
   assert.equal(calls.filter(row => row[0] === 'telegram').length, attemptsBeforeRestart);
   assert.equal(accepted.length, acceptedBeforeRestart);
   clock = 6000; await restarted.tick();
   assert.equal(accepted.filter(row => row[0] === 'telegram').length, 6);
-  assert.equal(calls.filter(row => row[0] === 'line' && row[1] === 'creaders1' && row[2] === blockedText).length, 1);
+  assert.equal(calls.filter(row => row[0] === 'line' && row[1] === 'creaders1' && row[2].includes('[來源0]')).length, 2);
   assert.equal(new Set(accepted.map(row => JSON.stringify(row))).size, 11);
   await restarted.tick(); assert.equal(accepted.length, 11);
   assert.equal(restarted.state.routes.filter(route => route.phase === 'blocked').length, 1);

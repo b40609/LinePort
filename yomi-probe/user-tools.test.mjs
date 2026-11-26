@@ -88,13 +88,14 @@ test('a failed settings replacement retains the pre-restore backup', async () =>
 async function ambiguousFixture() {
   const directory = await fixture(), value = config(), calls = [];
   value.rules[0].include = []; value.rules[0].prefix = '';
-  let fail = true;
+  let clock = 1000, fail = true;
   const adapters = {
     line: { identity: 'synthetic-line', prepare: async () => {}, recent: async () => [], read: async () => [{ id: 'a', text: 'first', createdTime: 1100 }, { id: 'b', text: 'second', createdTime: 1101 }] },
     telegram: { identity: 'synthetic-bot', prepare: async () => {}, send: async (id, text) => { calls.push(text); if (fail) throw new Error('synthetic timeout'); return { id: '-1:123' }; } },
   };
-  const options = { config: value, directory, adapters, now: () => 1000, pause: async () => {} };
-  await (await createMultiRelay(options)).tick();
+  const options = { config: value, directory, adapters, now: () => clock, pause: async () => {}, resendDelayMs: 1000 };
+  const relay = await createMultiRelay(options);
+  await relay.tick(); clock += 1000; await relay.tick();
   return { directory, options, calls, recover: () => { fail = false; }, store: createDeliveryReviewStore(directory) };
 }
 for (const decision of ['received', 'skip']) test(`single ${decision} resolution persists and only the remaining queue resumes`, async () => {
@@ -107,10 +108,13 @@ for (const decision of ['received', 'skip']) test(`single ${decision} resolution
   await assert.rejects(store.resolve({ ...item, decision }), /變更/);
   assert.equal(await readFile(path.join(directory, `lineport-route-${item.identity}.jsonl`), 'utf8'), original);
   recover(); const restarted = await createMultiRelay(options); await restarted.tick();
-  assert.deepEqual(calls, ['first', 'second']);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0], 'first');
+  assert.match(calls[1], /^⚠️ 可能重複.*\nfirst$/);
+  assert.equal(calls[2], 'second');
   assert.equal(restarted.state.routes[0].pending, 0);
   await (await createMultiRelay(options)).tick();
-  assert.deepEqual(calls, ['first', 'second']);
+  assert.equal(calls.length, 3);
 });
 test('review rejects bulk retry, traversal, stale revisions and truncated audit records', async () => {
   const { directory, options, store } = await ambiguousFixture();

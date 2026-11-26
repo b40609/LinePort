@@ -112,15 +112,16 @@ test('cross-platform replies use destination IDs and preserve the same route aft
   }
 });
 
-test('unknown reply delivery stays blocked after restart and never retries the child', async () => {
-  const client = adapter([message(1)]), setup = await options(config({ replies: true }), client);
+test('unknown reply delivery resends once with its reply target, then stays blocked after restart', async () => {
+  let clock = 1000;
+  const client = adapter([message(1)]), setup = await options(config({ replies: true }), client, { now: () => clock, resendDelayMs: 1000 });
   const first = await createMultiRelay(setup); await first.tick();
   let attempts = 0;
   client.read = async () => [message(2, { replyTo: '-1:1' })];
   client.send = async (_, __, options) => { attempts++; assert.deepEqual(options, { replyTo: '-2:101' }); throw new Error('SYNTHETIC_LOST_ACK'); };
-  await first.tick(); assert.equal(first.state.uncertain, 1);
-  const restarted = await createMultiRelay(setup); await restarted.tick(); await restarted.tick();
-  assert.equal(attempts, 1); assert.equal(restarted.state.routes[0].phase, 'blocked');
+  await first.tick(); clock += 1000; await first.tick(); assert.equal(first.state.uncertain, 1);
+  const restarted = await createMultiRelay(setup); clock += 5000; await restarted.tick(); await restarted.tick();
+  assert.equal(attempts, 2); assert.equal(restarted.state.routes[0].phase, 'blocked');
 });
 
 test('replies are opt-in and settings backup retains the option without changing old behavior', async () => {

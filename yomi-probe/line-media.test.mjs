@@ -55,11 +55,11 @@ async function fixture({ prepare, captionFailure = false, imageResponse } = {}) 
   const line = { identity:'synthetic-line',prepare:async()=>{},preparePayload:prepare|| (async()=>prepared),send:(id,payload,options)=>sendLinePhoto(service,id,payload,options.prepared,options) };
   return {calls,directory,telegram,options:{directory,config:config(),adapters:{line,telegram},now:()=>1000,pause:async()=>{}}};
 }
-test('preparation failure preserves pending without uncertain send; offline-source restart recovers and tracks both outputs', async () => {
+test('preparation failure backs off without uncertain send; offline-source restart recovers and tracks both outputs', async () => {
   const f = await fixture({prepare:async()=>{throw new Error('synthetic offline download');}});
   const relay = await createMultiRelay(f.options);await relay.tick();
   const line = relay.state.routes.find(row=>row.destination.platform==='line');
-  assert.equal(line.phase,'failed');assert.equal(line.pending,1);assert.equal(line.uncertain,0);assert.deepEqual(f.calls,['tg']);
+  assert.equal(line.phase,'running');assert.equal(line.retrying,1);assert.equal(line.pending,1);assert.equal(line.uncertain,0);assert.deepEqual(f.calls,['tg']);
   f.options.adapters.line.preparePayload=async()=>prepared;f.telegram.read=async()=>{throw new Error('synthetic offline source');};
   const restarted=await createMultiRelay(f.options);await restarted.tick();assert.deepEqual(f.calls,['tg','image','caption']);
   assert.equal(restarted.state.routes.find(row=>row.destination.platform==='line').pending,0);

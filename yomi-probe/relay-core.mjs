@@ -14,7 +14,21 @@ export async function appendRecord(file, row) {
 }
 
 export function parseJournal(text) {
-  const result = { seen: new Set(), pending: new Map(), replies: new Map(), delivered: new Map(), retryAt: 0, startedAt: null, routeIdentity: null };
+  // doubts: per unsent message, how many send attempts ended without a known result (a "sending" row
+  // with no "sent"; a "retry" row means that attempt provably delivered nothing). times: source time.
+  const result = { seen: new Set(), pending: new Map(), replies: new Map(), delivered: new Map(), retryAt: 0, startedAt: null, routeIdentity: null,
+    doubts: new Map(), times: new Map(), uncertainAt: new Map(), failures: {} };
+  const open = new Set();
+  const countFailure = row => {
+    if (typeof row.failure === 'string' && /^[a-z_]{2,30}$/.test(row.failure)) {
+      result.failures[row.failure] = (result.failures[row.failure] || 0) + 1;
+    }
+  };
+  const queuedTime = row => {
+    if (!('time' in row)) return;
+    if (!Number.isSafeInteger(row.time) || row.time <= 0) throw new Error('Invalid queued time');
+    result.times.set(row.id, row.time);
+  };
   // A truncated final row is ambiguous. Fail closed; never discard it and resend.
   if (text && !text.endsWith('\n')) throw new Error('Incomplete journal');
   for (const line of text.split('\n').filter(line => line.trim())) {
@@ -41,17 +55,34 @@ export function parseJournal(text) {
     } else if (typeof row.id === 'string' && row.outcome === 'retry') {
       if (!result.pending.has(row.id) || !Number.isSafeInteger(row.retryAt) || row.retryAt <= 0) throw new Error('Invalid retry');
       result.retryAt = Math.max(result.retryAt, row.retryAt);
+      countFailure(row);
+      if (open.delete(row.id)) {
+        const doubt = (result.doubts.get(row.id) || 0) - 1;
+        if (doubt > 0) result.doubts.set(row.id, doubt); else result.doubts.delete(row.id);
+      }
     } else if (typeof row.id === 'string' && row.id && row.outcome === 'media_queued') {
       if (![1, 2].includes(row.payloadVersion) || result.seen.has(row.id)) throw new Error('Invalid queued media');
       result.pending.set(row.id, journalPayload(row.payloadVersion, row.payload));
-      result.seen.add(row.id);
+      result.seen.add(row.id); queuedTime(row);
     } else if (typeof row.id === 'string' && row.id && row.outcome === 'queued') {
       if (typeof row.text !== 'string' || !row.text || result.seen.has(row.id)) throw new Error('Invalid queued message');
       result.pending.set(row.id, row.text);
-      result.seen.add(row.id);
+      result.seen.add(row.id); queuedTime(row);
     } else if (typeof row.id === 'string' && row.id && ['baseline', 'sending', 'sent', 'uncertain'].includes(row.outcome)) {
       result.seen.add(row.id);
-      if (row.outcome === 'sent') result.pending.delete(row.id);
+      if (row.outcome === 'sent') {
+        result.pending.delete(row.id); result.doubts.delete(row.id); result.times.delete(row.id); result.uncertainAt.delete(row.id); open.delete(row.id);
+      } else if (row.outcome === 'sending') {
+        result.doubts.set(row.id, (result.doubts.get(row.id) || 0) + 1); open.add(row.id);
+      } else if (row.outcome === 'uncertain') {
+        countFailure(row);
+        // Normally closes the attempt its "sending" row opened; a lone row (compacted journals) preserves attempt count.
+        if (!open.delete(row.id)) {
+          const attempts = Number.isSafeInteger(row.attempts) && row.attempts >= 1 ? row.attempts : 1;
+          result.doubts.set(row.id, (result.doubts.get(row.id) || 0) + attempts);
+        }
+        if (Number.isSafeInteger(row.at) && row.at > 0 && !result.uncertainAt.has(row.id)) result.uncertainAt.set(row.id, row.at);
+      }
     } else { throw new Error('Unknown journal record'); }
   }
   if (result.seen.size && result.startedAt === null) throw new Error('Missing baseline');

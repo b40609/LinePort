@@ -59,7 +59,7 @@ export async function downloadLineMedia(service, value, { load = yomiMedia } = {
     if (payload.kind === 'document' && payload.fileSize && bytes.length !== payload.fileSize) throw Object.assign(new Error('Size mismatch'), { permanent: true });
   } catch (error) {
     // A failed MAC check or a size that can never fit is permanent for this attachment; network errors are not.
-    throw Object.assign(new RelayError('LINE 附件下載、驗證或解密失敗，尚未呼叫目的發送；待送紀錄已保留，請確認 LINE 登入與來源附件後停止並重新啟動'),
+    throw Object.assign(new RelayError('LINE 附件下載、驗證或解密失敗，尚未呼叫目的發送；待送紀錄已保留，會自動重試，持續失敗請確認 LINE 登入與來源附件'),
       { permanent: error?.permanent === true || error?.name === 'MediaMacVerificationError' });
   }
   if (payload.kind === 'photo') {
@@ -83,10 +83,12 @@ async function sendCaption(service, destination, caption, signal) {
 }
 // Images use the LINE image API (JPEG/PNG only); every other attachment goes through the E2EE file API.
 export async function sendLineMedia(service, destination, value, prepared, { signal } = {}) {
-  const payload = mediaPayload(value);
+  let payload;
+  // Local checks before any LINE request: a failure here means nothing was sent.
+  try { payload = mediaPayload(value); } catch { throw Object.assign(new RelayError('附件內容無法組成，尚未發送'), { notSent: true }); }
   if (!Buffer.isBuffer(prepared?.bytes) || !prepared.bytes.length || prepared.bytes.length > MEDIA_LIMITS[payload.kind]
     || typeof prepared.fileName !== 'string' || safeFileName(prepared.fileName, '') !== prepared.fileName
-    || payload.fileSize && payload.source !== 'line' && prepared.bytes.length !== payload.fileSize) throw new RelayError('附件未完成安全下載，不能發送');
+    || payload.fileSize && payload.source !== 'line' && prepared.bytes.length !== payload.fileSize) throw Object.assign(new RelayError('附件未完成安全下載，不能發送'), { notSent: true });
   const asImage = payload.kind === 'photo' && ['image.jpg', 'image.png'].includes(prepared.fileName);
   const media = asImage ? await service.sendImage(destination, prepared.bytes, prepared.fileName)
     : await service.sendFile(destination, prepared.bytes, prepared.fileName);

@@ -23,27 +23,19 @@ const sha256 = text => createHash('sha256').update(text).digest('hex');
 const rowsOf = text => text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
 const jsonl = rows => rows.map(row => JSON.stringify(row) + '\n').join('');
 
-// Unresolved sends exactly as the manual review store computes them.
-function unresolvedOf(rows) {
-  const unresolved = new Set();
-  for (const row of rows) {
-    if (['sending', 'uncertain'].includes(row.outcome)) unresolved.add(row.id);
-    if (['sent', 'retry'].includes(row.outcome)) unresolved.delete(row.id);
-  }
-  return unresolved;
-}
 function routeMeaning(text, now) {
   const parsed = parseJournal(text);
   return {
     routeIdentity: parsed.routeIdentity, startedAt: parsed.startedAt,
-    seen: [...parsed.seen].sort(), unresolved: [...unresolvedOf(rowsOf(text))].sort(),
+    seen: [...parsed.seen].sort(), unresolved: [...parsed.doubts.keys()].sort(),
+    doubts: [...parsed.doubts.entries()].sort((a, b) => a[0].localeCompare(b[0])),
     pending: [...parsed.pending.entries()], replies: [...parsed.replies.entries()].filter(([id]) => parsed.pending.has(id)).sort(),
     delivered: [...parsed.delivered.entries()].sort(), retryAt: parsed.retryAt > now ? parsed.retryAt : 0,
   };
 }
 export function compactRouteJournal(text, { now = Date.now(), recentBodies = RECENT_BODIES } = {}) {
   if (!text) return text;
-  const rows = rowsOf(text), parsed = parseJournal(text), unresolved = unresolvedOf(rows);
+  const rows = rowsOf(text), parsed = parseJournal(text), unresolved = new Set(parsed.doubts.keys());
   const identityRow = rows.find(row => 'routeIdentity' in row);
   const queuedRow = new Map(), order = [];
   for (const row of rows) if (['queued', 'media_queued'].includes(row.outcome)) { queuedRow.set(row.id, row); order.push(row.id); }
@@ -55,21 +47,27 @@ export function compactRouteJournal(text, { now = Date.now(), recentBodies = REC
   if (parsed.startedAt !== null) out.push({ startedAt: parsed.startedAt, baseline: [...parsed.seen].filter(id => !own.has(id)) });
   const queue = (id, original) => {
     const reply = original && 'replyTo' in original ? { replyVersion: 1, replyTo: original.replyTo } : {};
+    const time = original && Number.isSafeInteger(original.time) && original.time > 0 ? { time: original.time } : {};
     const value = parsed.pending.get(id);
-    if (value !== undefined) return typeof value === 'string' ? { id, outcome: 'queued', text: value, ...reply }
-      : { id, outcome: 'media_queued', payloadVersion: payloadVersion(value), payload: value, ...reply };
+    if (value !== undefined) return typeof value === 'string' ? { id, outcome: 'queued', text: value, ...reply, ...time }
+      : { id, outcome: 'media_queued', payloadVersion: payloadVersion(value), payload: value, ...reply, ...time };
     // Already delivered: keep recent bodies verbatim, older ones as a placeholder that keeps the reply mapping.
     if (original && keepBody.has(id)) return original;
     return { id, outcome: 'queued', text: PLACEHOLDER, ...reply };
   };
+  const uncertainRow = id => ({
+    id, outcome: 'uncertain',
+    ...(parsed.doubts.get(id) > 1 ? { attempts: parsed.doubts.get(id) } : {}),
+    ...(parsed.uncertainAt.has(id) ? { at: parsed.uncertainAt.get(id) } : {}),
+  });
   for (const id of order) {
     if (!own.has(id)) continue;
     if (parsed.pending.has(id) || parsed.delivered.has(id) || unresolved.has(id)) out.push(queue(id, queuedRow.get(id)));
     if (parsed.delivered.has(id)) out.push({ id, outcome: 'sent', destinationId: parsed.delivered.get(id) });
-    else if (unresolved.has(id)) out.push({ id, outcome: 'uncertain' });
+    else if (unresolved.has(id)) out.push(uncertainRow(id));
   }
   // Unresolved IDs without a queued row (older journals) still need their evidence.
-  for (const id of unresolved) if (!queuedRow.has(id)) out.push({ id, outcome: 'uncertain' });
+  for (const id of unresolved) if (!queuedRow.has(id)) out.push(uncertainRow(id));
   // A future retry deadline must survive; attach it to a pending, resolved item.
   if (parsed.retryAt > now) {
     const anchor = [...parsed.pending.keys()].find(id => !unresolved.has(id));

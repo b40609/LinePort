@@ -3,7 +3,7 @@ import { destinationReply } from './reply-links.mjs';
 export function sendRelayText(service, destination, text, { replyTo, transportOnly = false } = {}) {
   let relation;
   if (replyTo !== undefined) {
-    if (!destinationReply('line', destination, replyTo)) throw new Error('Invalid LINE reply');
+    if (!destinationReply('line', destination, replyTo)) throw Object.assign(new Error('Invalid LINE reply'), { notSent: true });
     relation = { relatedMessageId: replyTo, messageRelationType: 3, relatedMessageServiceCode: 1 };
   }
   // The authenticated client retains LINE's transport encryption. Never retry a

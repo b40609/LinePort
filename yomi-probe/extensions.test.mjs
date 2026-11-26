@@ -66,13 +66,16 @@ test('Discord retry deadlines survive restart while other platforms continue', a
   assert.equal(restarted.state.routes[0].pending, 0);
 });
 
-test('Discord missing acknowledgement remains blocked after restart without a second send', async () => {
-  const folder = await directory(); let sends = 0;
+test('Discord missing acknowledgement resends once, then remains blocked after restart without a third send', async () => {
+  const folder = await directory(); let clock = 1000, sends = 0;
   const adapters = { line: { identity: 'synthetic', recent: async () => [], read: async () => [message()] }, discord: { identity: 'synthetic', prepare: async () => {}, send: async () => { sends++; return { id: '' }; } } };
-  const options = { config: config(), adapters, directory: folder, now: () => 1000 };
+  const options = { config: config(), adapters, directory: folder, now: () => clock, resendDelayMs: 1000 };
   const relay = await createMultiRelay(options); await relay.tick();
+  assert.equal(relay.state.routes[0].stage, 'resend_pending');
+  clock += 1000; await relay.tick();
+  assert.equal(sends, 2);
   assert.equal(relay.state.routes[0].phase, 'blocked');
-  const restarted = await createMultiRelay(options); await restarted.tick(); assert.equal(sends, 1); assert.equal(restarted.state.routes[0].phase, 'blocked');
+  const restarted = await createMultiRelay(options); clock += 5000; await restarted.tick(); assert.equal(sends, 2); assert.equal(restarted.state.routes[0].phase, 'blocked');
 });
 
 test('Discord source rules reject, Discord media destinations are accepted, and preview reflects the 2000 character limit', () => {

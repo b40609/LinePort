@@ -54,16 +54,16 @@ test('verification rejects a candidate that would lose a queued message or unres
 
 async function liveData() {
   const folder = await directory(), calls = [];
-  let fail = false, messages = Array.from({ length: 60 }, (_, i) => ({ id: `-1:${i + 1}`, text: `通知 ${i + 1} ${'x'.repeat(200)}`, createdTime: 2000 + i, from: '1' }));
+  let clock = 1000, fail = false, messages = Array.from({ length: 60 }, (_, i) => ({ id: `-1:${i + 1}`, text: `通知 ${i + 1} ${'x'.repeat(200)}`, createdTime: 2000 + i, from: '1' }));
   const telegram = { identity: 'tg', recent: async () => [], prepare: async () => {}, read: async () => messages,
     send: async (id, text) => { if (fail) throw new Error('SYNTHETIC'); calls.push(text); return { id: `${id}:${calls.length}` }; } };
   const setup = { config: normalizeConfig({ version: 1, rules: [{ id: 'r', name: 'r', enabled: true, sources: [endpoint('-1')], destinations: [endpoint('-2')] }] }),
-    adapters: { telegram }, directory: folder, now: () => 1000, pause: async () => {}, deliveryBudget: 100 };
+    adapters: { telegram }, directory: folder, now: () => clock, pause: async () => {}, deliveryBudget: 100, resendDelayMs: 1000 };
   const relay = await createMultiRelay(setup); await relay.tick();
   assert.equal(calls.length, 60);
-  // Then one uncertain send that a person resolves.
+  // Then one uncertain send whose single automatic resend also ends uncertain, so a person resolves it.
   fail = true; messages = [...messages, { id: '-1:61', text: '最後一則', createdTime: 3000, from: '1' }];
-  await relay.tick();
+  await relay.tick(); clock += 1000; await relay.tick();
   const review = createDeliveryReviewStore(folder), [item] = (await review.list()).items;
   await review.resolve({ ...item, decision: 'received' });
   fail = false;

@@ -14,11 +14,11 @@ const message = (id, time) => ({ id: `-1:${id}`, text: `通知 ${id}`, createdTi
 
 async function blockedRoute() {
   const folder = await directory(), calls = [];
-  let fail = true, messages = [message(1, 2000), message(2, 2001), message(3, 2002)];
+  let clock = 1000, fail = true, messages = [message(1, 2000), message(2, 2001), message(3, 2002)];
   const telegram = { identity: 'synthetic', recent: async () => [], prepare: async () => {}, read: async () => messages,
     send: async (id, text) => { if (fail) throw new Error('SYNTHETIC_UNKNOWN'); calls.push(text); return { id: `${id}:${100 + calls.length}` }; } };
-  const setup = { config: config(), adapters: { telegram }, directory: folder, now: () => 1000, pause: async () => {} };
-  const relay = await createMultiRelay(setup); await relay.tick();
+  const setup = { config: config(), adapters: { telegram }, directory: folder, now: () => clock, pause: async () => {}, resendDelayMs: 1000 };
+  const relay = await createMultiRelay(setup); await relay.tick(); clock += 1000; await relay.tick();
   assert.equal(relay.state.routes[0].phase, 'blocked');
   fail = false;
   return { folder, calls, telegram, setup, setMessages: value => { messages = value; } };

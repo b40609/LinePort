@@ -2,6 +2,11 @@ import { unseenText } from './relay-rules.mjs';
 
 export class RelayError extends Error {}
 
+export const FAILURE_KINDS = Object.freeze([
+  'rate_limit', 'unsent', 'not_sent', 'rejected', 'server_error',
+  'timeout', 'network', 'bad_response', 'no_ack', 'unknown',
+]);
+
 export function requireRelayEncryption(service) {
   if (!service.profile?.mid || !service.e2eeManager?.getSelfKeyByMid(service.profile.mid)) {
     throw new RelayError(relayFailure('e2ee_keys'));
@@ -37,8 +42,11 @@ const stageFailures = {
   journal: '轉送紀錄無法讀寫或不完整；請保留原紀錄並檢查磁碟與權限。',
   read: '來源訊息連續讀取失敗，轉送已停止；請確認網路與登入狀態。',
   login_required: '背景登入已失效；請停止轉送，再用手機重新授權。',
+  prepare: '附件安全下載或準備連續失敗，轉送已停止；請確認來源附件、網路與登入狀態後重新啟動。',
+  destination_rejected: '目的平台拒絕操作（權限、Token 或聊天室／話題設定異常），訊息確定尚未送出；請修正設定後重新啟動。',
+  send_not_sent: '發送前檢查未通過，訊息確定尚未送出；請檢查聊天室狀態與設定後重新啟動。',
   send: '目的群組發送失敗；請先人工確認是否收到，再停止並重啟。',
-  send_uncertain: '目的群組發送結果不明，轉送已停止；請人工確認是否收到，該訊息不會自動重送。',
+  send_uncertain: '目的群組發送結果持續不明（或附件發送結果不明），轉送已停止；請人工確認是否收到，已停止路線不會自動重送。',
 };
 
 export function relayFailure(stage) {
@@ -76,7 +84,7 @@ export function destinationEncryptionFailure(error) {
 
 // Only fixed operation names may cross the status/diagnostic boundary.
 export function safeRelayStage(stage) {
-  return typeof stage === 'string' && (Object.hasOwn(stageFailures, stage) || ['start', 'rules', 'waiting', 'prepare'].includes(stage)) ? stage : 'unknown';
+  return typeof stage === 'string' && (Object.hasOwn(stageFailures, stage) || ['start', 'rules', 'waiting', 'resend_pending'].includes(stage)) ? stage : 'unknown';
 }
 
 export function relayWarning(state) {
