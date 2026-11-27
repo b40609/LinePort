@@ -8,6 +8,12 @@ import { readFile, writeFile, rename } from 'node:fs/promises';
 
 const clean = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 100);
 const READ_FAILURE_LIMIT = 5;
+// A destination that never accepts the connection (DNS/TLS/refused) keeps the item queued and retries
+// with backoff; alert once the same route has failed this many times in a row or for this long.
+export const UNSENT_ALERT_STREAK = 8;
+export const UNSENT_ALERT_MS = 10 * 60 * 1000;
+// A watchdog circuit stamp further in the future than this is clock skew or corruption, not a circuit.
+const CIRCUIT_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_ALERT_LOG_LINES = 1000;
 
 const titles = {
@@ -15,6 +21,7 @@ const titles = {
   route_blocked: '路線已暫停',
   route_failed: '路線失敗停止',
   route_quarantined: '有訊息被平台明確拒絕，已單筆隔離（路線繼續運作）',
+  route_unreachable: '目的平台持續連不上，訊息已保留並自動重試中',
   relay_failed: '轉送程序失敗',
   relay_down: '轉送程序已停止或無回應',
   watchdog_circuit_open: '看門狗連續重啟失敗，已暫停自動重啟',
@@ -24,7 +31,7 @@ const titles = {
   storage_warning: '儲存容量接近上限（80%）',
 };
 
-export function healthEvents({ relay = {}, account = {}, storage = null, relayDown = false, watchdogCircuitAt = '' } = {}) {
+export function healthEvents({ relay = {}, account = {}, storage = null, relayDown = false, watchdogCircuitAt = '', now = Date.now() } = {}) {
   const events = [];
   const routes = Array.isArray(relay.routes) ? relay.routes : [];
   routes.forEach((route, index) => {
@@ -42,6 +49,14 @@ export function healthEvents({ relay = {}, account = {}, storage = null, relayDo
     const ids = Array.isArray(route.quarantineIds) ? route.quarantineIds.map(clean).filter(Boolean).slice(-5) : [];
     events.push({ key: `quarantine:${clean(route.key) || index}`, kind: 'route_quarantined', subject: clean(route.name), ids, informational: true,
       signature: ['route_quarantined', count, ids.join(',')].join('|') });
+  });
+  // Destination unreachable: the route itself keeps running and retrying, so nothing above fires.
+  routes.forEach((route, index) => {
+    if (['blocked', 'failed'].includes(route?.phase)) return;
+    const streak = Number(route?.unsentStreak) || 0, since = Date.parse(route?.unsentSince);
+    const long = streak >= 2 && Number.isFinite(since) && now - since >= UNSENT_ALERT_MS;
+    if (streak < UNSENT_ALERT_STREAK && !long) return;
+    events.push({ key: `unreachable:${clean(route.key) || index}`, kind: 'route_unreachable', subject: clean(route.name), stage: 'send_unreachable', signature: 'route_unreachable' });
   });
   if (relay.phase === 'failed' && !routes.length) events.push({ key: 'relay', kind: 'relay_failed', stage: clean(relay.stage), signature: `relay_failed|${relay.stage}` });
   if (relayDown === true) {
@@ -152,7 +167,9 @@ export function alertTargetConflict(config, settings, { hasDedicatedBot = false,
 // A channel resends an unresolved event only when its signature changes or after cooldownMs.
 export function createHealthMonitor({ channels, dataDirectory = null, now = Date.now, cooldownMs = 6 * 60 * 60 * 1000, sendTimeoutMs = 20000 }) {
   const states = new Map(channels.map(channel => [channel.name, { active: new Map(), recover: false, summaryDate: '' }]));
-  let downStreak = 0, seededSummary = false;
+  // lastRelayUpAt: last time the relay worker answered. A watchdog circuit stamp older than that was closed
+  // by a recovery the watchdog may not have recorded yet (manual fix), so it is stale (review 2026-11-27 P1-2).
+  let downStreak = 0, seededSummary = false, lastRelayUpAt = 0;
   async function seedSummaryDates(today) {
     if (seededSummary || !dataDirectory) { seededSummary = true; return; }
     seededSummary = true;
@@ -171,10 +188,14 @@ export function createHealthMonitor({ channels, dataDirectory = null, now = Date
       const phase = snapshot.relay?.phase;
       if (snapshot.relayWanted === true && ['stopped', 'unavailable'].includes(phase)) downStreak++;
       else downStreak = 0;
-      const events = healthEvents({ ...snapshot, relayDown: snapshot.relayDown === true || downStreak >= 3 });
-      const at = now(), keys = new Set(events.map(event => event.key)), delivered = [];
+      const at = now();
       // While the relay is down its routes are absent; keep their alerts until it is back to judge them.
       const relayUp = ['running', 'degraded', 'failed'].includes(phase);
+      if (relayUp) lastRelayUpAt = at;
+      const circuitAt = typeof snapshot.watchdogCircuitAt === 'string' ? Date.parse(snapshot.watchdogCircuitAt) : NaN;
+      const circuitOpen = !relayUp && Number.isFinite(circuitAt) && circuitAt <= at + CIRCUIT_CLOCK_SKEW_MS && circuitAt > lastRelayUpAt;
+      const events = healthEvents({ ...snapshot, now: at, relayDown: snapshot.relayDown === true || downStreak >= 3, watchdogCircuitAt: circuitOpen ? snapshot.watchdogCircuitAt : '' });
+      const keys = new Set(events.map(event => event.key)), delivered = [];
       const clock = taipeiClock(at);
       const wantSummary = snapshot.dailySummary === true && clock.hour >= (Number.isSafeInteger(snapshot.dailySummaryHour) ? snapshot.dailySummaryHour : 9);
       if (wantSummary) await seedSummaryDates(clock.date);

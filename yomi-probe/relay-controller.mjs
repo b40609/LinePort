@@ -44,6 +44,7 @@ export function createRelayController({ run = execute, request = fetch } = {}) {
             ...(typeof route.fastForwardAt === 'string' ? { fastForwardAt: route.fastForwardAt.slice(0, 40) } : {}),
             forwarded: count(route.forwarded), pending: count(route.pending), uncertain: count(route.uncertain), errors: count(route.errors), skipped: count(route.skipped),
             quarantined: count(route.quarantined), quarantinedSinceStart: count(route.quarantinedSinceStart), deduplicated: count(route.deduplicated), resent: count(route.resent), retrying: count(route.retrying),
+            unsentStreak: count(route.unsentStreak), unsentSince: typeof route.unsentSince === 'string' ? route.unsentSince.slice(0, 40) : null,
             failures: safeFailures(route.failures),
             lastSend: typeof route.lastSend === 'string' ? route.lastSend.slice(0, 40) : null, warning: String(route.warning || '').slice(0, 300), replyNotice: String(route.replyNotice || '').slice(0, 200),
             retryAt: count(route.retryAt),

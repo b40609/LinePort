@@ -89,7 +89,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
   for (const rule of config.rules.filter(rule => rule.enabled)) for (const source of rule.sources) for (const destination of rule.destinations) {
     const sourceKey = endpointKey(source), destinationKey = endpointKey(destination);
     const status = { key: digest([sourceKey, destinationKey]).slice(0, 24), ruleId: rule.id, name: rule.name, source, destination,
-      phase: 'starting', stage: 'baseline', forwarded: 0, uncertain: 0, errors: 0, skipped: 0, deduplicated: 0, quarantined: 0, resent: 0, retrying: 0, failures: {}, pending: 0, lastSend: null, warning: '' };
+      phase: 'starting', stage: 'baseline', forwarded: 0, uncertain: 0, errors: 0, skipped: 0, deduplicated: 0, quarantined: 0, resent: 0, retrying: 0, unsentStreak: 0, unsentSince: null, failures: {}, pending: 0, lastSend: null, warning: '' };
     state.routes.push(status);
     const edge = { rule, source, destination, status, seen: new Set(), startedAt: now() };
     edges.push(edge);
@@ -222,8 +222,17 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     return safe;
   }
   function clearHold(edge) { edge.holdUntil = 0; edge.holdFailures = 0; edge.holdNote = ''; edge.holdStage = ''; }
-  // Nothing was delivered: keep the item queued and try again later (5 s doubling to 5 min) instead of
-  // stopping the route. The health monitor alerts once the same item has failed three times in a row.
+  // Consecutive "connection never established" sends on this route, exposed so the health monitor can
+  // raise route_unreachable (health-alert.mjs UNSENT_ALERT_STREAK / UNSENT_ALERT_MS). A delivery, a
+  // rate-limit answer from the platform, or an empty queue ends the streak.
+  function markUnsent(edge) {
+    edge.unsentFailures = (edge.unsentFailures || 0) + 1;
+    edge.status.unsentStreak = edge.unsentFailures;
+    if (!edge.status.unsentSince) edge.status.unsentSince = new Date(now()).toISOString();
+  }
+  function clearUnsent(edge) { edge.unsentFailures = 0; edge.status.unsentStreak = 0; edge.status.unsentSince = null; }
+  // Attachment preparation failed with nothing delivered: keep the item queued and try again later (5 s
+  // doubling to 5 min); the 6th consecutive failure fails the route, which the health monitor reports.
   function defer(edge, error, stage) {
     edge.holdFailures = (edge.holdFailures || 0) + 1;
     edge.holdUntil = now() + Math.min(300000, 5000 * 2 ** Math.min(edge.holdFailures - 1, 6));
@@ -462,7 +471,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
                 const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + error.retryAfterMs);
                 cooldowns.set(edge.destination.platform, retryAt);
                 cooldownNotes.delete(edge.destination.platform);
-                settleAttempt(edge, id);
+                settleAttempt(edge, id); clearUnsent(edge);
                 await logFailure(edge, 'send', 'retry', error, sendElapsed);
                 await edge.record({ id, outcome: 'retry', retryAt, failure: 'rate_limit' });
                 status.stage = 'waiting';
@@ -477,7 +486,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
               // Only a request that provably never left this machine may be retried; any delivered chunk
               // means a retry would duplicate it without a notice, so that case falls through to uncertain.
               if (error?.unsent === true && deliveredChunks === 0) {
-                edge.unsentFailures = (edge.unsentFailures || 0) + 1;
+                markUnsent(edge);
                 const retryAt = Math.max(cooldowns.get(edge.destination.platform) || 0, now() + Math.min(300000, 5000 * 2 ** Math.min(edge.unsentFailures - 1, 6)));
                 cooldowns.set(edge.destination.platform, retryAt);
                 cooldownNotes.set(edge.destination.platform, error.message);
@@ -526,7 +535,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
             await edge.record({ id, outcome: 'sent', ...(acknowledged ? { destinationId: acknowledged } : {}), ...(isResend ? { resent: true } : {}) });
             if (acknowledged) edge.delivered.set(id, acknowledged);
             edge.pending.delete(id); edge.doubts.delete(id); edge.times.delete(id); edge.uncertainAt.delete(id);
-            clearHold(edge); edge.unsentFailures = 0; edge.quarantineStreak = 0;
+            clearHold(edge); clearUnsent(edge); edge.quarantineStreak = 0;
             status.forwarded++; if (isResend) status.resent++; status.lastSend = new Date(now()).toISOString();
           }
           status.stage = 'waiting';
@@ -544,6 +553,7 @@ export async function createMultiRelay({ config, adapters, platformErrors = {}, 
     for (const edge of edges) {
       if (!edge.pending) continue;
       edge.status.pending = edge.pending.size;
+      if (!edge.pending.size && edge.unsentFailures) clearUnsent(edge);
       const platformRetry = cooldowns.get(edge.destination.platform) > now() ? cooldowns.get(edge.destination.platform) : 0;
       const holdRetry = edge.holdUntil > now() ? edge.holdUntil : 0;
       edge.status.retryAt = Math.max(platformRetry, holdRetry);
