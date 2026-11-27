@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, readdir, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, readdir, stat, copyFile, unlink, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { normalizeAutostart, createAutostartStore, writeAutostartScripts, applyAutostartShortcuts, refreshAutostartScripts, compareVersions, writtenByVersion, AUTOSTART_SCHEMA_VERSION, APP_VERSION } from './autostart.mjs';
@@ -94,8 +94,8 @@ function Invoke-RestMethod {
 });
 
 test('applyAutostartShortcuts creates and removes only its own two shortcuts', { skip: windowsOnly.skip }, async t => {
-  const home = await mkdtemp(path.join(os.tmpdir(), 'lineport-autostart-'));
-  const appData = await mkdtemp(path.join(os.tmpdir(), 'lineport-appdata-'));
+  const home = await realpath(await mkdtemp(path.join(os.tmpdir(), 'lineport-autostart-')));
+  const appData = await realpath(await mkdtemp(path.join(os.tmpdir(), 'lineport-appdata-')));
   t.after(() => import('node:fs/promises').then(fs => { fs.rm(home, { recursive: true, force: true }); fs.rm(appData, { recursive: true, force: true }); }));
   const previousAppData = process.env.APPDATA, previousLocal = process.env.LOCALAPPDATA;
   process.env.APPDATA = appData; process.env.LOCALAPPDATA = home;
@@ -119,8 +119,8 @@ test('applyAutostartShortcuts creates and removes only its own two shortcuts', {
 });
 
 test('shortcut arguments point at the generated scripts with a hidden window', { skip: windowsOnly.skip }, async t => {
-  const home = await mkdtemp(path.join(os.tmpdir(), 'lineport-autostart-'));
-  const appData = await mkdtemp(path.join(os.tmpdir(), 'lineport-appdata-'));
+  const home = await realpath(await mkdtemp(path.join(os.tmpdir(), 'lineport-autostart-')));
+  const appData = await realpath(await mkdtemp(path.join(os.tmpdir(), 'lineport-appdata-')));
   t.after(() => import('node:fs/promises').then(fs => { fs.rm(home, { recursive: true, force: true }); fs.rm(appData, { recursive: true, force: true }); }));
   const previousAppData = process.env.APPDATA;
   process.env.APPDATA = appData;
@@ -134,14 +134,18 @@ test('shortcut arguments point at the generated scripts with a hidden window', {
   const startup = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
   for (const name of ['LinePort 自動啟動.lnk', 'LinePort 自動啟動 轉送.lnk']) {
     const lnk = path.join(startup, name);
+    await stat(lnk);
+    // WScript.Shell.CreateShortcut cannot open non-ACP filenames on English Windows; inspect via an ASCII copy.
+    const asciiCopy = path.join(startup, 'inspect-shortcut.lnk');
+    await copyFile(lnk, asciiCopy);
     const { stdout } = await run(shell, [`-NoProfile`, `-NonInteractive`, `-Command`,
-      `$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut(${JSON.stringify(lnk)}); Write-Output ($s.TargetPath + '|' + $s.Arguments + '|' + $s.WorkingDirectory)`], { windowsHide: true, timeout: 30000 });
+      `$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut(${JSON.stringify(asciiCopy)}); Write-Output ($s.TargetPath + '|' + $s.Arguments + '|' + $s.WorkingDirectory)`], { windowsHide: true, timeout: 30000 });
+    await unlink(asciiCopy);
     const [target, args, working] = String(stdout).trim().split('|');
     assert.equal(target.toLowerCase(), shell.toLowerCase());
     assert.match(args, /-WindowStyle Hidden -File /);
     assert.ok(args.includes(path.join(home, 'LinePort')), 'shortcut should run the generated script');
     assert.equal(working, path.join(home, 'LinePort'));
-    await stat(lnk);
   }
 });
 
@@ -151,7 +155,7 @@ const execute = async (args, options = {}) => {
     (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr })));
 };
 const temporaryHome = async t => {
-  const home = await mkdtemp(path.join(os.tmpdir(), 'lineport-autostart-v2-'));
+  const home = await realpath(await mkdtemp(path.join(os.tmpdir(), 'lineport-autostart-v2-')));
   t.after(() => import('node:fs/promises').then(fs => fs.rm(home, { recursive: true, force: true })));
   return home;
 };

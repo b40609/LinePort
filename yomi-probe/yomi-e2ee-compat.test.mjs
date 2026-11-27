@@ -75,8 +75,8 @@ async function scenario(code, fixed = true) {
     env: { ...process.env, SYNTHETIC_E2EE_FIX: fixed === 'async' ? 'async' : fixed ? '1' : '0' },
     windowsHide: true,
   });
-  // Yomi probes macOS at import time even on Windows; do not hide other warnings.
-  let warnings = result.stderr.replace(/^.*sw_vers.*(?:\r?\n|$)/gm, '');
+  // Yomi probes macOS at import time even on Windows; English cmd.exe wraps the error across two lines.
+  let warnings = result.stderr.replace(/^.*sw_vers.*(?:\r?\n(?:operable program or batch file\.\r?\n)?|$)/gm, '');
   if (fixed === 'async') warnings = warnings.replace(/^.*(?:DEP0205|trace-deprecation|ExperimentalWarning|trace-warnings).*(?:\r?\n|$)/gm, '');
   assert.equal(warnings, '');
 }

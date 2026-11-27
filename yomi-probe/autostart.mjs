@@ -244,16 +244,20 @@ export async function applyAutostartShortcuts(enabled, localAppData = process.en
   for (const entry of targets) {
     const wanted = (entry.kind === 'service' && enabled.service) || (entry.kind === 'relay' && enabled.relay);
     if (!wanted) { await unlink(entry.lnk).catch(error => { if (error.code !== 'ENOENT') throw error; }); results.push({ kind: entry.kind, enabled: false }); continue; }
+    // WScript.Shell.CreateShortcut uses the system ANSI code page and fails on non-CJK Windows when the .lnk
+    // filename contains Chinese characters; save to an ASCII path first, then rename via Unicode Move-Item.
+    const tempLnk = path.join(startup, `lineport-${entry.kind}-${randomUUID()}.lnk`);
     const command = [
       `$ws = New-Object -ComObject WScript.Shell`,
-      `$s = $ws.CreateShortcut(${psQuote(entry.lnk)})`,
+      `$s = $ws.CreateShortcut(${psQuote(tempLnk)})`,
       `$s.TargetPath = ${psQuote(shell)}`,
       `$s.Arguments = ${psQuote('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + entry.script + '"')}`,
       `$s.WorkingDirectory = ${psQuote(scriptDirectory(localAppData))}`,
       `$s.Description = ${psQuote(entry.description)}`,
       `$s.Save()`,
+      `Move-Item -LiteralPath ${psQuote(tempLnk)} -Destination ${psQuote(entry.lnk)} -Force`,
     ].join('\n');
-    await run(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], { windowsHide: true, timeout: 30000 });
+    await run(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], { windowsHide: true, timeout: 30000 });
     results.push({ kind: entry.kind, enabled: true });
   }
   return results;

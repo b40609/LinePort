@@ -19,8 +19,15 @@ function Write-WatchdogLog([string]$Message) {
         $entry = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'), ($Message -replace '[\r\n]+', ' ')
         $kept = @()
         if (Test-Path -LiteralPath $logPath) { $kept = @(Get-Content -LiteralPath $logPath -Tail ($LogLines - 1) -Encoding UTF8) }
-        # Retry briefly: antivirus scans can hold the log file for a moment.
-        for ($try = 0; $try -lt 5; $try++) { try { Set-Content -LiteralPath $logPath -Value (@($kept) + $entry) -Encoding UTF8; break } catch { Start-Sleep -Milliseconds 200 } }
+        # Write via a temp file and atomic rename so readers and antivirus scans never observe a truncated 0-byte log.
+        $tmpLog = $logPath + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+        for ($try = 0; $try -lt 5; $try++) {
+            try {
+                Set-Content -LiteralPath $tmpLog -Value (@($kept) + $entry) -Encoding UTF8
+                Move-Item -LiteralPath $tmpLog -Destination $logPath -Force
+                break
+            } catch { Start-Sleep -Milliseconds 200 }
+        }
     } catch { }
 }
 function Send-WatchdogToast([string]$Title, [string]$Body) {
