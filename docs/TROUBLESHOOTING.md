@@ -34,7 +34,7 @@
 | Telegram 連線未建立，訊息尚未送出 | DNS、拒絕連線或 TLS 失敗，請求確定沒有送到 Telegram；待送已保存，等待後自動重試（5 秒起倍增，最長 5 分鐘），不會鎖定路線。持續出現時檢查網路、DNS、Proxy 與系統時間 |
 | 沒收到 Telegram 健康告警 | 到「設定與診斷 → 系統健康告警」確認已啟用、聊天室 ID 正確、Bot 在該聊天室（私訊需先按 Start），再按「發送測試告警」。告警只在異常開始、內容改變或 6 小時後重送；網路中斷期間送不出，恢復後下一次檢查會補送 |
 | 開機後服務沒有起來 | 看 `%LOCALAPPDATA%\LinePort\autostart.log`：每次登入啟動都會記錄啟動的版本與錯誤摘要。出現「較新的 LinePort 寫入」表示舊版被擋下覆寫，請改用較新版；沒有任何紀錄表示啟動捷徑沒有執行，到 Windows 設定→應用程式→啟動確認 |
-| 看門狗沒有拉起服務 | 看 `%LOCALAPPDATA%\LinePort\watchdog.log`。「circuit open」表示 15 分鐘內已重啟 3 次仍失敗，看門狗暫停，請改看 autostart.log 與頁面狀態；手動停止轉送後看門狗不會重新開始轉送。排程工作由 `yomi-probe\install-watchdog.ps1` 安裝（`-DryRun` 先預覽、`-Uninstall` 移除） |
+| 看門狗沒有拉起服務 | 看 `%LOCALAPPDATA%\LinePort\watchdog.log`。「circuit open」表示 1 小時內已重啟 3 次、或連續重啟 3 次（僵死 worker 為 2 次）仍未恢復，看門狗暫停到下次檢查看到服務與轉送正常為止（「circuit closed」），請改看 autostart.log 與頁面狀態；手動停止轉送後看門狗不會重新開始轉送。排程工作由 `yomi-probe\install-watchdog.ps1` 安裝（`-DryRun` 先預覽、`-Uninstall` 移除） |
 | journal | 紀錄不能寫入或末行不完整；停止、保留原檔，檢查磁碟空間與權限 |
 | 系統匣燈號是紅色 | 滑鼠停在圖示上看原因：「待核對」到人工處理逐筆核對；「本機服務沒有回應」等看門狗重啟或重新開啟 LinePort。右鍵「重啟轉送」只做停止再開始，不會處理不明發送 |
 | 換版時出現「權限讀不到它的命令列」 | 舊服務以系統管理員或其他 Windows 帳號執行，新版無法安全辨識，所以沒有停止它。用同樣身分關閉舊 LinePort，或以系統管理員開啟工作管理員結束提示中的 PID，再重新開啟 |

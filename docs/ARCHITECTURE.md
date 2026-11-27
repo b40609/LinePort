@@ -77,13 +77,13 @@ Telegram 的網路例外依 `error.code`／`error.cause.code` 分類（`telegram
 
 ## 防無聲死亡（v1.1.0）
 
-**系統健康告警**（`health-alert.mjs`）在介面程序（18765）以獨立計時器每 60 秒檢查一次，讀取已去識別的轉送狀態、LINE 帳號狀態與容量，不在轉送程序（18766）內執行，所以告警逾時或失敗不會影響轉送。事件只有固定幾類：路線 blocked／failed（含 `send_uncertain` 與最多 5 個待核對訊息 ID）、LINE `login_required`、來源連續讀取失敗 5 次、容量達 80% 預警或停機。每個頻道（Windows 通知、Telegram）各自去重：同一事件未恢復前只送一次，簽章（階段、不明數、ID）改變或 6 小時冷卻後才重送；送出失敗下次檢查再試。異常全部消失且轉送回到 running 時送一次恢復通知。Telegram 頻道沿用已保存的 Bot Token，只另存目的聊天室 ID 與選填話題 ID（`lineport-health-alert.json`，與規則分開，不改變規則 revision，也不需停止轉送）；告警內容不含訊息全文、帳號、Token 或原始錯誤。設定備份會帶上告警目的，舊備份沒有此欄位仍可還原。
+**系統健康告警**（`health-alert.mjs`）在介面程序（18765）以獨立計時器每 60 秒檢查一次，讀取已去識別的轉送狀態、LINE 帳號狀態與容量，不在轉送程序（18766）內執行，所以告警逾時或失敗不會影響轉送。事件只有固定幾類：路線 blocked／failed（含 `send_uncertain` 與最多 5 個待核對訊息 ID）、LINE `login_required`、來源連續讀取失敗 5 次、目的平台連續 8 次或持續 10 分鐘未建立連線（`route_unreachable`）、容量達 80% 預警或停機。每個頻道（Windows 通知、Telegram）各自去重：同一事件未恢復前只送一次，簽章（階段、不明數、ID）改變或 6 小時冷卻後才重送；送出失敗下次檢查再試。異常全部消失且轉送回到 running 時送一次恢復通知。Telegram 頻道沿用已保存的 Bot Token，只另存目的聊天室 ID 與選填話題 ID（`lineport-health-alert.json`，與規則分開，不改變規則 revision，也不需停止轉送）；告警內容不含訊息全文、帳號、Token 或原始錯誤。設定備份會帶上告警目的，舊備份沒有此欄位仍可還原。
 
 Windows 本機通知（`windows-notify.mjs`）改用原生 Toast（會留在通知中心），標題與內容只經環境變數傳入固定腳本並做 XML 跳脫；WinRT 不可用時才退回氣球通知，並讓程序存活 12 秒確保顯示。
 
 **開機啟動腳本**（`autostart.mjs`）在 `autostart.json` 與兩支腳本檔頭寫入 `schemaVersion` 與 `writtenByVersion`。版本低於磁碟上已記錄版本的程式不會覆寫（比較規則同 `upgrade-service.ps1`：x.y.z，rc 低於正式版），避免舊版可攜版蓋掉新版設定。服務啟動時若已啟用自動啟動，且腳本由較舊版本或無版本紀錄的程式寫入，會自動重寫。安裝版改依資料夾名稱中的版本挑選最新啟動器，不再依最後修改時間。腳本以 UTF-8 BOM 寫入（Windows PowerShell 5.1 才能正確讀取非 ASCII 路徑），每次啟動與錯誤摘要寫入 `%LOCALAPPDATA%\LinePort\autostart.log`（保留最近 200 行，不含 Token）。
 
-**看門狗**（`watchdog.ps1`，由 `install-watchdog.ps1` 安裝成排程工作 `LinePort-Service-Recovery`：登入時與每 5 分鐘執行）讀取 `autostart.json` 與 `relay-intent.json`（頁面開始／停止轉送時記錄的使用者意圖）。服務無回應且啟用服務自動啟動時，執行 `autostart-service.ps1`；轉送應在執行（自動轉送開啟、使用者沒有手動停止）但程序不存在（phase 為 stopped／unavailable）時，執行 `autostart-relay.ps1`。failed／blocked 需要人工核對，看門狗不處理。15 分鐘內最多自動拉起 3 次，超過即停手並只記一次；紀錄寫入 `watchdog.log`（保留最近 500 行）。診斷 API 需要頁面的一次性 Token，看門狗與既有自動轉送腳本一樣從本機首頁取得，Token 不寫入任何檔案。
+**看門狗**（`watchdog.ps1`，由 `install-watchdog.ps1` 安裝成排程工作 `LinePort-Service-Recovery`：登入時與每 5 分鐘執行）讀取 `autostart.json` 與 `relay-intent.json`（頁面開始／停止轉送時記錄的使用者意圖）。服務無回應且啟用服務自動啟動時，執行 `autostart-service.ps1`；轉送應在執行（自動轉送開啟、使用者沒有手動停止）但程序不存在（phase 為 stopped／unavailable）時，執行 `autostart-relay.ps1`。failed／blocked 需要人工核對，看門狗不處理。斷路器同時看三種計數：1 小時內自動拉起 3 次、兩次健康檢查之間連續拉起 3 次、僵死 worker 被強制重啟 2 次（每次強制結束都可能讓進行中的發送變成不明），任一達上限即停手、記一次並跳 Windows 通知；斷路器維持打開，直到某次檢查看到服務與轉送都正常（手動修復或登入自動啟動）才關閉並清掉 `circuitLoggedAt`。健康監控只在轉送程序沒有回應、且時間戳晚於最後一次看到轉送正常時才把它當成斷路器告警，避免舊時間戳誤報並壓掉恢復通知。紀錄寫入 `watchdog.log`（保留最近 500 行）。診斷 API 需要頁面的一次性 Token，看門狗與既有自動轉送腳本一樣從本機首頁取得，Token 不寫入任何檔案。
 
 ## 圖片與檔案（v1.2.0）
 
