@@ -38,5 +38,5 @@ $logon.Delay = 'PT1M'
 $repeat = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
 $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($logon, $repeat) -Settings $settings -Principal $principal -Description 'LinePort watchdog: restarts the local service and relay when autostart expects them (max 3 restarts per 15 minutes).' -Force | Out-Null
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($logon, $repeat) -Settings $settings -Principal $principal -Description 'LinePort watchdog: restarts the local service and relay when autostart expects them (circuit breaker: 3 restarts per hour or without recovery, 2 for a hung relay).' -Force | Out-Null
 Write-Output "Installed task $TaskName (logon + every $IntervalMinutes minutes)."

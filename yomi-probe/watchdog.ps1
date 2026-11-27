@@ -1,11 +1,17 @@
 ﻿# LinePort watchdog: run by the "LinePort-Service-Recovery" scheduled task (at logon and every
 # 5 minutes). It only restarts what autostart says should be running, never undoes a manual
 # relay stop, and stops itself after too many restarts. No token or message text is logged.
+# Circuit breaker (review 2026-11-27 P1-1): restarts are counted three ways so the 5-minute cadence
+# cannot slip past the limit: within a sliding window, consecutively without a healthy check in
+# between, and hung-worker restarts (each forced stop can leave a send uncertain) on their own lower
+# cap. Once open it stays open until a check finds everything healthy (manual fix, logon autostart),
+# which also clears circuitLoggedAt so the health monitor stops reporting it (P1-2).
 param(
     [string]$LinePortHome = (Join-Path $env:LOCALAPPDATA 'LinePort'),
     [string]$BaseUrl = 'http://127.0.0.1:18765',
     [int]$MaxRestarts = 3,
-    [int]$WindowMinutes = 15,
+    [int]$WindowMinutes = 60,
+    [int]$MaxHungRestarts = 2,
     [int]$LogLines = 500,
     [string]$StopRelayScript = '',
     [switch]$DryRun
@@ -126,10 +132,19 @@ try {
     } catch { }
 
     $state = Read-JsonFile $statePath
+    # DateTime subtraction ignores Kind, so compare restart stamps in UTC whatever offset they were saved with.
     $now = Get-Date
-    $recent = @(@($state.restarts) | Where-Object { $_ } | ForEach-Object { [datetime]::Parse($_, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) } | Where-Object { ($now - $_).TotalMinutes -lt $WindowMinutes })
+    $recent = @(@($state.restarts) | Where-Object { $_ } | ForEach-Object { [datetime]::Parse($_, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime() } | Where-Object { ($now.ToUniversalTime() - $_).TotalMinutes -lt $WindowMinutes })
     $prevStreak = if ($state -and $null -ne $state.unavailableStreak) { [int]$state.unavailableStreak } else { 0 }
     $unavailableStreak = if ($relayWanted -and $serviceUp -and $relayPhase -eq 'unavailable') { $prevStreak + 1 } else { 0 }
+    # Restarts since the last healthy check, and hung-worker restarts among them.
+    $failStreak = if ($state -and $null -ne $state.failStreak) { [int]$state.failStreak } else { 0 }
+    $hungStreak = if ($state -and $null -ne $state.hungStreak) { [int]$state.hungStreak } else { 0 }
+    $circuitAt = if ($state -and $state.circuitLoggedAt) { [string]$state.circuitLoggedAt } else { $null }
+    $healthy = $serviceUp -and (!$relayWanted -or @('running', 'degraded') -contains $relayPhase)
+    function Save-WatchdogState($Restarts, $CircuitAt, $Unavailable, $Fail, $Hung) {
+        Save-State @{ restarts = @($Restarts | ForEach-Object { $_.ToString('o') }); circuitLoggedAt = $CircuitAt; unavailableStreak = $Unavailable; failStreak = $Fail; hungStreak = $Hung }
+    }
 
     $actions = @()
     $stopHungFirst = $false
@@ -142,26 +157,36 @@ try {
     } elseif ($relayWanted -and $relayPhase -eq 'unavailable') {
         if ($unavailableStreak -lt 2) {
             Write-WatchdogLog "relay unavailable (streak $unavailableStreak/2); waiting one more check before stopping hung worker"
-            Save-State @{ restarts = @($recent | ForEach-Object { $_.ToString('o') }); circuitLoggedAt = $(if ($state) { $state.circuitLoggedAt } else { $null }); unavailableStreak = $unavailableStreak }
+            Save-WatchdogState $recent $circuitAt $unavailableStreak $failStreak $hungStreak
             exit 0
         }
         $stopHungFirst = $true
         $actions += 'autostart-relay.ps1'
     }
     if (!$actions.Count) {
-        if ($prevStreak -ne 0) {
-            Save-State @{ restarts = @($recent | ForEach-Object { $_.ToString('o') }); circuitLoggedAt = $(if ($state) { $state.circuitLoggedAt } else { $null }); unavailableStreak = 0 }
+        if ($healthy -and ($circuitAt -or $failStreak -or $hungStreak)) {
+            # Recovered (by us or by hand): close the circuit so neither side keeps reporting it.
+            if ($circuitAt) { Write-WatchdogLog 'circuit closed: service and relay are healthy again' }
+            Save-WatchdogState $recent $null 0 0 0
+        } elseif ($prevStreak -ne 0) {
+            Save-WatchdogState $recent $circuitAt 0 $failStreak $hungStreak
         }
         exit 0
     }
 
     $reason = 'service ' + $(if ($serviceUp) { 'up' } else { 'down' }) + ', relay ' + $relayPhase
-    if ($recent.Count -ge $MaxRestarts) {
-        # Circuit breaker: log and notify once per open window, then stay quiet until restarts age out.
-        if (!$state.circuitLoggedAt -or ($now - [datetime]::Parse($state.circuitLoggedAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)).TotalMinutes -ge $WindowMinutes) {
-            Write-WatchdogLog "circuit open: $($recent.Count) restarts within $WindowMinutes minutes; not restarting ($reason). Check autostart.log and the LinePort page."
-            Send-WatchdogToast 'LinePort 看門狗已暫停自動重啟' "服務連續重啟 $($recent.Count) 次仍無法恢復（$reason），請開啟 LinePort 並檢查 autostart.log。"
-            Save-State @{ restarts = @($recent | ForEach-Object { $_.ToString('o') }); circuitLoggedAt = $now.ToString('o'); unavailableStreak = $unavailableStreak }
+    $why = if ($stopHungFirst -and $hungStreak -ge $MaxHungRestarts) { "$hungStreak hung-relay restarts without recovery" }
+        elseif ($failStreak -ge $MaxRestarts) { "$failStreak restarts without a healthy check" }
+        elseif ($recent.Count -ge $MaxRestarts) { "$($recent.Count) restarts within $WindowMinutes minutes" }
+        else { $null }
+    if ($why) {
+        # Circuit breaker: log and notify once per open episode, then stay quiet until a healthy check closes it.
+        if (!$circuitAt) {
+            Write-WatchdogLog "circuit open: $why; not restarting ($reason). Check autostart.log and the LinePort page."
+            Send-WatchdogToast 'LinePort 看門狗已暫停自動重啟' "服務重啟 $([Math]::Max($failStreak, $recent.Count)) 次仍無法恢復（$reason），已停止自動重啟；請開啟 LinePort 並檢查 autostart.log。"
+            Save-WatchdogState $recent $now.ToString('o') $unavailableStreak $failStreak $hungStreak
+        } elseif ($unavailableStreak -ne $prevStreak) {
+            Save-WatchdogState $recent $circuitAt $unavailableStreak $failStreak $hungStreak
         }
         exit 0
     }
@@ -169,7 +194,7 @@ try {
     if ($stopHungFirst) { Stop-HungRelay | Out-Null }
     $started = $false
     foreach ($action in $actions) { if (Start-Entrypoint $action) { $started = $true } }
-    if ($started) { Save-State @{ restarts = @(@($recent | ForEach-Object { $_.ToString('o') }) + $now.ToString('o')); circuitLoggedAt = $null; unavailableStreak = 0 } }
+    if ($started) { Save-WatchdogState (@($recent) + $now) $null 0 ($failStreak + 1) ($hungStreak + $(if ($stopHungFirst) { 1 } else { 0 })) }
 } catch {
     $text = [string]$_.Exception.Message
     Write-WatchdogLog ('watchdog error: ' + $_.Exception.GetType().Name + ': ' + $text.Substring(0, [Math]::Min(300, $text.Length)))

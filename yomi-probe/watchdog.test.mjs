@@ -168,3 +168,91 @@ test('prune-versions keeps current and previous complete versions, removes older
   const remaining = (await readdir(versions)).sort();
   assert.deepEqual(remaining, ['1.0.2-20261123121108', '1.1.0-20261123173000', '1.1.0-20261123173100', 'keep-unrelated']);
 });
+
+// Review 2026-11-27 P1-1/P1-2: replay the real 5-minute Task Scheduler cadence. Every run is one tick;
+// between ticks all timestamps in watchdog-state.json are moved back by the tick length, which is what
+// the script would observe had the wall clock advanced.
+async function switchableUi(t, initial) {
+  let phase = initial;
+  const server = http.createServer((req, res) => {
+    if (req.url === '/') { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(`<title>LinePort</title><script>const token='${token}';</script>`); return; }
+    if (req.url === '/api/diagnostics' && req.headers['x-probe-token'] === token) { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ phase })); return; }
+    res.writeHead(403); res.end();
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  return { url: `http://127.0.0.1:${server.address().port}`, set: value => { phase = value; } };
+}
+const statePathOf = directory => path.join(directory, 'watchdog-state.json');
+async function readState(directory) {
+  try { return JSON.parse((await readFile(statePathOf(directory), 'utf8')).replace(/^\uFEFF/, '')); } catch { return null; }
+}
+// Same shape as PowerShell's ToString('o') on local time (offset kept), so parsing round-trips unchanged.
+function localIso(ms) {
+  const date = new Date(ms), offset = -date.getTimezoneOffset(), pad = (value, size = 2) => String(Math.abs(value)).padStart(size, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}${offset < 0 ? '-' : '+'}${pad(Math.trunc(offset / 60))}:${pad(offset % 60)}`;
+}
+async function ageState(directory, seconds) {
+  const state = await readState(directory);
+  if (!state) return;
+  const shift = value => {
+    if (Array.isArray(value)) return value.map(shift);
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, shift(item)]));
+    if (typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/.test(value) && !Number.isNaN(Date.parse(value))) return localIso(Date.parse(value) - seconds * 1000);
+    return value;
+  };
+  await writeFile(statePathOf(directory), JSON.stringify(shift(state)));
+}
+async function onSchedule(directory, url, ticks, { seconds = 300, extra = [] } = {}) {
+  for (let index = 0; index < ticks; index++) {
+    assert.equal((await watchdog(directory, url, extra)).code, 0);
+    await ageState(directory, seconds);
+  }
+  const log = await logOf(directory);
+  const count = pattern => (log.match(pattern) || []).length;
+  return { log, stopHung: count(/would stop hung relay/g), started: count(/would start autostart-relay\.ps1/g), circuit: count(/circuit open/g), notified: count(/would notify: LinePort 看門狗已暫停自動重啟/g) };
+}
+const stopStub = async directory => { const file = path.join(directory, 'stop-relay-stub.ps1'); await writeFile(file, '# synthetic stop'); return ['-StopRelayScript', file]; };
+
+test('P1-1: a relay that stays hung on the 5-minute schedule is restarted a bounded number of times, then the circuit opens once', windowsOnly, async t => {
+  const ui = await switchableUi(t, 'unavailable');
+  const directory = await home(t, { intent: 'running' });
+  const result = await onSchedule(directory, ui.url, 12, { extra: await stopStub(directory) });
+  assert.ok(result.stopHung >= 1 && result.stopHung <= 2, `hung restarts must be capped, saw ${result.stopHung}`);
+  assert.equal(result.circuit, 1, 'circuit must open exactly once in one hour of hung checks');
+  assert.equal(result.notified, 1);
+});
+
+test('P1-1: a relay found stopped on every 5-minute check (exact or jittered cadence) stops being restarted after the limit', windowsOnly, async t => {
+  for (const seconds of [300, 290, 310]) {
+    const ui = await switchableUi(t, 'stopped');
+    const directory = await home(t, { intent: 'running' });
+    const result = await onSchedule(directory, ui.url, 12, { seconds });
+    assert.ok(result.started <= 3, `cadence ${seconds}s: restarts must stop at the limit, saw ${result.started}`);
+    assert.equal(result.circuit, 1, `cadence ${seconds}s: circuit must open exactly once`);
+  }
+});
+
+test('P1-2: once the relay is healthy again the watchdog clears the circuit stamp and its failure streaks', windowsOnly, async t => {
+  const ui = await switchableUi(t, 'stopped');
+  const directory = await home(t, { intent: 'running' });
+  await onSchedule(directory, ui.url, 5);
+  assert.equal(typeof (await readState(directory))?.circuitLoggedAt, 'string', 'precondition: circuit is open');
+  ui.set('running');
+  await onSchedule(directory, ui.url, 1);
+  const cleared = await readState(directory);
+  assert.equal(cleared.circuitLoggedAt ?? null, null, 'healthy check must clear circuitLoggedAt');
+  assert.equal(cleared.failStreak, 0);
+  assert.match(await logOf(directory), /circuit closed: service and relay are healthy again/);
+  // Another outage inside the hour (a flapping relay) reopens the circuit with a fresh notification, never silently.
+  ui.set('stopped');
+  const flapping = await onSchedule(directory, ui.url, 1);
+  assert.equal(flapping.circuit, 2);
+  assert.equal(flapping.notified, 2);
+  // After a healthy hour the window has aged out and a new outage is restarted normally.
+  ui.set('running');
+  await onSchedule(directory, ui.url, 12);
+  ui.set('stopped');
+  const later = await onSchedule(directory, ui.url, 1);
+  assert.equal((later.log.match(/recovering: service up, relay stopped/g) || []).length, 4);
+});
