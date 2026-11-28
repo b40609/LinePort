@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { once } from 'node:events';
 import { mkdtemp, readFile, writeFile, readdir } from 'node:fs/promises';
@@ -218,6 +219,22 @@ test('home has nonce CSP, no-store and no unresolved placeholders', async t => {
   assert.match(result.body, /v1\.2\.0 · LINE · Telegram/);
   assert.match(result.body, /id="checkUpdate"/);
   assert.ok(result.body.includes('href="https://github.com/b40609/LinePort/releases"'));
+});
+test('home CSP stays nonce-only for <style> and allows only the WebKit <select> UA attribute hash', async t => {
+  const { call } = await setup(t);
+  const result = await call('/', undefined, {}, 'GET');
+  const csp = result.headers['content-security-policy'];
+  const directives = Object.fromEntries(csp.split(';').map(part => part.trim().split(/\s+/)).map(([name, ...values]) => [name, values]));
+  const nonce = directives['script-src'][0];
+  assert.match(nonce, /^'nonce-[A-Za-z0-9+/=]+'$/);
+  assert.deepEqual(directives['style-src'], [nonce]);
+  const webkitSelectHash = `'sha256-${createHash('sha256').update('text-overflow:inherit').digest('base64')}'`;
+  assert.deepEqual(directives['style-src-attr'], ["'unsafe-hashes'", webkitSelectHash]);
+  assert.ok(!csp.includes('unsafe-inline'));
+  assert.doesNotMatch(result.body, /\sstyle\s*=/i, 'inline style attributes are blocked by the nonce CSP');
+  assert.doesNotMatch(result.body, /setAttribute\(\s*['"]style['"]|\.style\.cssText\s*=/, 'scripts must not write style attributes');
+  const styleTags = result.body.match(/<style\b[^>]*>/g);
+  assert.ok(styleTags.length > 0 && styleTags.every(tag => tag.includes(`nonce="${nonce.slice(7, -1)}"`)));
 });
 test('isolated HTTP download, backup validation and restore preserve pre-restore settings', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lineport-api-acceptance-'));

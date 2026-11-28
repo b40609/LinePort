@@ -2,7 +2,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { authorized, readJson, localRequest, hardenServer, HttpError } from './local-http.mjs';
 import { prepareDataDirectory } from './runtime.mjs';
 import { lineDevice } from './line-device.mjs';
@@ -28,6 +28,7 @@ import { recentSenders, lineSourceSenders } from './source-senders.mjs';
 import { createDiscordClient, discordId } from './discord.mjs';
 import { notifyWindows } from './windows-notify.mjs';
 import { createHealthMonitor, startHealthMonitor, telegramAlertChannel, webhookAlertChannel, localLogAlertChannel, windowsAlertChannel, alertTargetConflict, formatTestAlert } from './health-alert.mjs';
+const WEBKIT_SELECT_STYLE_HASH = `'sha256-${createHash('sha256').update('text-overflow:inherit').digest('base64')}'`;
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 export function createProbeServer({ service, runPwlessLogin, runQrLogin, prepareRestart, onRestarted = () => {}, onShutdown = () => {}, relayController, settingsStore, reviewStore, dataDirectory, autostartStore, telegramFactory = createTelegramClient, discordFactory = createDiscordClient, healthAlerts = false, notify = notifyWindows, updateCheck = checkForUpdate, port = 18765, token = randomBytes(32).toString('hex') }) {
@@ -112,7 +113,9 @@ const server = http.createServer(async (req, res) => {
       const nonce = randomBytes(16).toString('base64');
       const html = (await readFile(path.join(root, 'index.html'), 'utf8')).replaceAll('__TOKEN__', token).replaceAll('__NONCE__', nonce)
         .replaceAll('__LINE_DEVICE__', device.id).replaceAll('__LINE_DEVICE_LABEL__', device.label).replaceAll('__LINE_DEVICE_NOTICE__', device.notice);
-      res.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src data: https://obs.line-scdn.net; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+      // WebKit bug 327212 (REGRESSION 321159@main): every <select> sets style="text-overflow:inherit" on its UA shadow slot before
+      // the slot is attached, so the page CSP blocks it. style-src-attr allows only that exact attribute value by hash; <style> stays nonce-only.
+      res.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; style-src-attr 'unsafe-hashes' ${WEBKIT_SELECT_STYLE_HASH}; img-src data: https://obs.line-scdn.net; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
       return send(res, 200, html, 'text/html; charset=utf-8');
     }
     if (!authorized(req, token)) return send(res, 403, { error: '請從本機首頁開啟' });
